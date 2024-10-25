@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{iter, thread};
 
 mod node;
@@ -14,8 +14,8 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-const NX: u32 = 512;
-const NY: u32 = NX;
+const NX: u32 = 1024;
+const NY: u32 = 512;
 const NZ: u32 = 1;
 const NODES: u32 = NX * NY * NZ;
 const WORKGROUP_SIZE: u32 = 8;
@@ -70,6 +70,46 @@ const VERTICES: &[Vertex] = &[
 
 const INDICES: &[u16] = &[0, 1, 2, 2, 3, 0];
 
+struct FrameRateCounter {
+    last_frame_time: Instant,
+    last_print_time: Instant,
+    frame_count: u32,
+    fps: f32,
+}
+
+impl FrameRateCounter {
+    fn new() -> Self {
+        let now = Instant::now();
+        Self {
+            last_frame_time: now,
+            last_print_time: now,
+            frame_count: 0,
+            fps: 0.0,
+        }
+    }
+
+    fn update(&mut self) {
+        let now = Instant::now();
+        let duration = now.duration_since(self.last_frame_time);
+        self.last_frame_time = now;
+
+        // Increment frame count for the FPS calculation
+        self.frame_count += 1;
+
+        // Update and print FPS every 1 second
+        if now.duration_since(self.last_print_time).as_secs_f32() >= 1.0 {
+            self.fps = self.frame_count as f32;
+            println!("FPS: {:.2}", self.fps);
+            self.frame_count = 0;
+            self.last_print_time = now;
+        }
+    }
+
+    fn get_fps(&self) -> f32 {
+        self.fps
+    }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
@@ -112,10 +152,13 @@ struct State {
     compute_toggle: bool,
 
     render_bg: wgpu::BindGroup,
+    frame_rate_counter: FrameRateCounter,
 }
 
 impl State {
     async fn new(window: Window) -> Self {
+        let mut frame_rate_counter = FrameRateCounter::new();
+
         let size = window.inner_size();
 
         // The instance is a handle to our GPU
@@ -187,7 +230,7 @@ impl State {
             nodes_y: NY,
             sphere_x: NX as f32 / 4.0,
             sphere_y: NY as f32 / 2.0,
-            sphere_r: NY as f32 / 5.0,
+            sphere_r: NY as f32 / 10.0,
             inlet_vel: 0.1,
         };
 
@@ -202,7 +245,7 @@ impl State {
             nodes_y: NY,
             sphere_x: NX as f32 / 4.0,
             sphere_y: NY as f32 / 2.0,
-            sphere_r: NY as f32 / 5.0,
+            sphere_r: uniform.sphere_r,
             mode: 0, // 0: velocity magnitude, 1: vorticity, 2: density
             min_value: 0.0,
             max_value: 0.15,
@@ -459,6 +502,7 @@ impl State {
             compute_toggle: true,
 
             render_bg,
+            frame_rate_counter,
         }
     }
 
@@ -521,6 +565,7 @@ impl State {
 
             let dispatch_x = (NX + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
             let dispatch_y = (NY + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+
             compute_pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
         }
 
@@ -562,6 +607,8 @@ impl State {
         } else {
             self.compute_toggle = true
         }
+
+        self.frame_rate_counter.update();
 
         Ok(())
     }
