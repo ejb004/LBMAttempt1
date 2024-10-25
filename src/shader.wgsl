@@ -1,13 +1,29 @@
+// Define the uniform buffer
+struct VisualisationUniforms {
+    nodes_x: u32,
+    nodes_y: u32,
+    mode: u32,          // 0: velocity magnitude, 1: vorticity, 2: density
+    min_value: f32,     // For color scaling
+    max_value: f32,
+    sphere_x: f32,      // For obstacle visualization
+    sphere_y: f32,
+    sphere_r: f32,
+};
+
+@group(0) @binding(0) var<uniform> uniforms: VisualisationUniforms;
+// Define storage buffer 1 (input)
+@group(0) @binding(1) var<storage, read> compute_buffer: array<f32>;
+
 // Vertex shader
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
-    @location(1) color: vec3<f32>,
+    @location(1) uv: vec2<f32>,
 };
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec3<f32>,
+    @location(0) uv: vec2<f32>,
 };
 
 @vertex
@@ -15,14 +31,152 @@ fn vs_main(
     model: VertexInput,
 ) -> VertexOutput {
     var out: VertexOutput;
-    out.color = model.color;
+    out.uv = model.uv;
     out.clip_position = vec4<f32>(model.position, 1.0);
     return out;
 }
 
 // Fragment shader
 
+// D2Q9 velocities for macroscopic calculations
+var<private> c_x: array<f32, 9> = array<f32, 9>(
+    0.0,  1.0,  0.0, -1.0,  0.0,  1.0, -1.0, -1.0,  1.0
+);
+var<private> c_y: array<f32, 9> = array<f32, 9>(
+    0.0,  0.0,  1.0,  0.0, -1.0,  1.0,  1.0, -1.0, -1.0
+);
+
+fn getIndex(x: u32, y: u32, direction: u32) -> u32 {
+    return (y * uniforms.nodes_x + x) * 9u + direction;
+}
+
+fn getMacroscopic(x: u32, y: u32) -> vec3<f32> {
+    var density = 0.0;
+    var momentum_x = 0.0;
+    var momentum_y = 0.0;
+    
+    for (var i = 0u; i < 9u; i++) {
+        let f = compute_buffer[getIndex(x, y, i)];
+        density += f;
+        momentum_x += c_x[i] * f;
+        momentum_y += c_y[i] * f;
+    }
+    
+    return vec3<f32>(
+        density,
+        momentum_x / density,  // ux
+        momentum_y / density   // uy
+    );
+}
+
+// Calculate vorticity at a point
+fn getVorticity(x: u32, y: u32) -> f32 {
+    if (x == 0u || x == uniforms.nodes_x - 1u || 
+        y == 0u || y == uniforms.nodes_y - 1u) {
+        return 0.0;
+    }
+    
+    // Get velocities at surrounding points
+    let macro_right = getMacroscopic(x + 1u, y);
+    let macro_left = getMacroscopic(x - 1u, y);
+    let macro_top = getMacroscopic(x, y + 1u);
+    let macro_bottom = getMacroscopic(x, y - 1u);
+    
+    // Central difference for velocity derivatives
+    let du_dy = (macro_top.y - macro_bottom.y) / 2.0;
+    let dv_dx = (macro_right.z - macro_left.z) / 2.0;
+    
+    return du_dy - dv_dx;  // 2D vorticity is du_dy - dv_dx
+}
+
+// Color mapping function (blue-white-red)
+fn getColor(value: f32, min_val: f32, max_val: f32) -> vec3<f32> {
+    let normalized = (value - min_val) / (max_val - min_val);
+    let clamped = clamp(normalized, 0.0, 1.0);
+    
+    if (clamped < 0.5) {
+        // Blue to white
+        let t = clamped * 2.0;
+        return vec3<f32>(t, t, 1.0);
+    } else {
+        // White to red
+        let t = (clamped - 0.5) * 2.0;
+        return vec3<f32>(1.0, 1.0 - t, 1.0 - t);
+    }
+}
+
+// Check if point is in obstacle
+fn isInSphere(pos: vec2<f32>) -> bool {
+    let dx = pos.x - uniforms.sphere_x;
+    let dy = pos.y - uniforms.sphere_y;
+    return (dx * dx + dy * dy) <= (uniforms.sphere_r * uniforms.sphere_r);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.color, 1.0);
+    let x = u32(in.uv.x * f32(uniforms.nodes_x));
+    let y = u32(in.uv.y * f32(uniforms.nodes_y));
+    
+    // Check if point is in obstacle
+    if (isInSphere(vec2<f32>(f32(x), f32(y)))) {
+        return vec4<f32>(0.2, 0.2, 0.2, 1.0);  // Gray for obstacle
+    }
+
+    // Get macroscopic quantities
+    let macro_v = getMacroscopic(x, y);
+    var value: f32;
+    
+    switch(uniforms.mode) {
+        case 0u: {
+            // Velocity magnitude
+            value = sqrt(macro_v.y * macro_v.y + macro_v.z * macro_v.z);
+        }
+        case 1u: {
+            // Vorticity
+            value = getVorticity(x, y);
+        }
+        default: {
+            // Density
+            value = macro_v.x;
+        }
+    }
+    
+    let color = getColor(value, uniforms.min_value, uniforms.max_value);
+    return vec4<f32>(color, 1.0);
 }
+
+// @fragment
+// fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+// // Step 1: Use the UV coordinates, ensuring they are clamped within [0.0, 1.0]
+//     let uv = clamp(in.uv, vec2(0.0), vec2(1.0));
+
+//     // Step 2: Convert UV coordinates to grid indices
+//     let grid_index_x: u32 = u32(uv.x * f32(uniforms.nodes_x));
+//     let grid_index_y: u32 = u32(uv.y * f32(uniforms.nodes_y));
+
+//     // Step 3: Ensure grid indices are within bounds
+//     let clamped_x = min(grid_index_x, uniforms.nodes_x - 1u);
+//     let clamped_y = min(grid_index_y, uniforms.nodes_y - 1u);
+
+//     // Step 4: Convert grid indices to a flat array index
+//     let cell_index: u32 = clamped_y * uniforms.nodes_x + clamped_x; // Fixed: removed * uniforms.nodes_y
+//     let buffer_index: u32 = cell_index * 9u;  // Base index for the cell
+
+//     // Debug: output the buffer index as grayscale
+//     // return vec4<f32>(f32(buffer_index) / f32(100u * 100u * 9u), 0.0, 0.0, 1.0);
+
+//     // Step 5: Sample the buffer
+//     var value: f32 = compute_buffer[buffer_index];
+
+//     for (var i: u32 = 1u; i < 9u; i++) {
+//         value += abs(compute_buffer[buffer_index+i]);
+//     }
+
+//     value /= 2.0;
+//     value = pow(value, 5.0);
+
+//     // Step 6: Use the sampled value in fragment processing
+//     return vec4<f32>(value, value, value, 1.0);
+
+    
+// }

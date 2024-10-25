@@ -1,13 +1,12 @@
-mod gui;
-mod gui_example;
+use std::time::Duration;
+use std::{iter, thread};
 
-use std::iter;
+mod node;
 
-use egui_wgpu::renderer::ScreenDescriptor;
-use gui::EguiRenderer;
-use gui_example::GUI;
-use wgpu::util::DeviceExt;
-use wgpu::TextureViewDescriptor;
+use node::Node;
+use rand::Rng;
+use wgpu::{util::DeviceExt, BindGroupLayoutDescriptor};
+use wgpu::{BindGroupLayoutEntry, TextureViewDescriptor};
 use winit::{
     event::*,
     event_loop::EventLoop,
@@ -15,14 +14,18 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::prelude::*;
+const NX: u32 = 512;
+const NY: u32 = NX;
+const NZ: u32 = 1;
+const NODES: u32 = NX * NY * NZ;
+const WORKGROUP_SIZE: u32 = 8;
+const WINDOW_SIZE: u32 = 2048;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
     position: [f32; 3],
-    color: [f32; 3],
+    uv: [f32; 2],
 }
 
 impl Vertex {
@@ -39,7 +42,7 @@ impl Vertex {
                 wgpu::VertexAttribute {
                     offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3,
+                    format: wgpu::VertexFormat::Float32x2,
                 },
             ],
         }
@@ -48,20 +51,48 @@ impl Vertex {
 
 const VERTICES: &[Vertex] = &[
     Vertex {
-        position: [0.0, 0.5, 0.0],
-        color: [1.0, 0.0, 0.0],
+        position: [0.5 * NX as f32 / NY as f32, 0.5, 0.0],
+        uv: [1.0, 1.0],
     },
     Vertex {
-        position: [-0.5, -0.5, 0.0],
-        color: [0.0, 1.0, 0.0],
+        position: [-0.5 * NX as f32 / NY as f32, 0.5, 0.0],
+        uv: [0.0, 1.0],
     },
     Vertex {
-        position: [0.5, -0.5, 0.0],
-        color: [0.0, 0.0, 1.0],
+        position: [-0.5 * NX as f32 / NY as f32, -0.5, 0.0],
+        uv: [0.0, 0.0],
+    },
+    Vertex {
+        position: [0.5 * NX as f32 / NY as f32, -0.5, 0.0],
+        uv: [1.0, 0.0],
     },
 ];
 
-const INDICES: &[u16] = &[0, 1, 2];
+const INDICES: &[u16] = &[0, 1, 2, 2, 3, 0];
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Params {
+    nodes_x: u32,
+    nodes_y: u32,
+    sphere_x: f32,
+    sphere_y: f32,
+    sphere_r: f32,
+    inlet_vel: f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct VisualisationUniforms {
+    nodes_x: u32,
+    nodes_y: u32,
+    mode: u32,
+    min_value: f32,
+    max_value: f32,
+    sphere_x: f32,
+    sphere_y: f32,
+    sphere_r: f32,
+}
 
 struct State {
     surface: wgpu::Surface,
@@ -70,12 +101,17 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     render_pipeline: wgpu::RenderPipeline,
-    // NEW!
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
     window: Window,
-    egui: gui::EguiRenderer,
+
+    compute_pipeline: wgpu::ComputePipeline,
+    compute_bg0: wgpu::BindGroup,
+    compute_bg1: wgpu::BindGroup,
+    compute_toggle: bool,
+
+    render_bg: wgpu::BindGroup,
 }
 
 impl State {
@@ -132,6 +168,7 @@ impl State {
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
@@ -143,15 +180,209 @@ impl State {
         };
         surface.configure(&device, &config);
 
+        // ------------------- UNIFORM =---------------------------------------------------- ----------------------------  //
+        // UNIFORM -------------
+        let uniform = Params {
+            nodes_x: NX,
+            nodes_y: NY,
+            sphere_x: NX as f32 / 4.0,
+            sphere_y: NY as f32 / 2.0,
+            sphere_r: NY as f32 / 5.0,
+            inlet_vel: 0.1,
+        };
+
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Uniform Buffer"),
+            contents: bytemuck::cast_slice(&[uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let visualise_uniform = VisualisationUniforms {
+            nodes_x: NX,
+            nodes_y: NY,
+            sphere_x: NX as f32 / 4.0,
+            sphere_y: NY as f32 / 2.0,
+            sphere_r: NY as f32 / 5.0,
+            mode: 0, // 0: velocity magnitude, 1: vorticity, 2: density
+            min_value: 0.0,
+            max_value: 0.15,
+        };
+
+        let visualise_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Visual Buffer"),
+            contents: bytemuck::cast_slice(&[visualise_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // COMPUTE SHADER ----------------------------------------------------------------------------------------------------
+
+        let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Compute Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("compute3.wgsl").into()),
+        });
+
+        let nodes: Vec<Node> = (0..NODES)
+            .map(|i| {
+                let mut rng = rand::thread_rng();
+                let y: f32 = rng.gen();
+
+                Node::with_density(1.0 + y / 20.0)
+            })
+            .collect();
+
+        let compute_buffer0 = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Compute Buffer 00"),
+            contents: bytemuck::cast_slice(&nodes),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        let compute_buffer1 = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Compute Buffer 01"),
+            contents: bytemuck::cast_slice(&nodes),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        let compute_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("compute BGL"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let compute_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Uniform BG"),
+            layout: &compute_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: compute_buffer0.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: compute_buffer1.as_entire_binding(),
+                },
+            ],
+        });
+
+        // CHECK IF YOU NEED THE UNIFORM HERE OR CAN HAVE IT SEPERATELY
+        let compute_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Uniform BG"),
+            layout: &compute_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: compute_buffer1.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: compute_buffer0.as_entire_binding(),
+                },
+            ],
+        });
+
+        let compute_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Render Pipeline Layout"),
+                bind_group_layouts: &[&compute_bgl],
+                push_constant_ranges: &[],
+            });
+
+        let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Compute Pipeline"),
+            layout: Some(&compute_pipeline_layout),
+            module: &compute_shader,
+            entry_point: "cs_main",
+        });
+
+        // --------------------------- SHADER ---------------------------------------------------------------------  //
+
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
+        let render_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("render BGL"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let render_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("render BG"),
+            layout: &render_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: visualise_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: compute_buffer1.as_entire_binding(),
+                },
+            ],
+        });
+
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[],
+                bind_group_layouts: &[&render_bgl],
                 push_constant_ranges: &[],
             });
 
@@ -211,15 +442,6 @@ impl State {
         });
         let num_indices = INDICES.len() as u32;
 
-        // ...
-        let mut egui = EguiRenderer::new(
-            &device,       // wgpu Device
-            config.format, // TextureFormat
-            None,          // this can be None
-            1,             // samples
-            &window,       // winit Window
-        );
-
         Self {
             surface,
             device,
@@ -231,7 +453,12 @@ impl State {
             index_buffer,
             num_indices,
             window,
-            egui,
+            compute_pipeline,
+            compute_bg0,
+            compute_bg1,
+            compute_toggle: true,
+
+            render_bg,
         }
     }
 
@@ -276,6 +503,28 @@ impl State {
             });
 
         {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Compute Pass"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(&self.compute_pipeline);
+            compute_pass.set_bind_group(
+                0,
+                if self.compute_toggle == true {
+                    &self.compute_bg0
+                } else {
+                    &self.compute_bg1
+                },
+                &[],
+            );
+
+            let dispatch_x = (NX + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+            let dispatch_y = (NY + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+            compute_pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
+        }
+
+        {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -298,27 +547,21 @@ impl State {
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_bind_group(0, &self.render_bg, &[]);
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
 
-        let screen_descriptor = ScreenDescriptor {
-            size_in_pixels: [self.config.width, self.config.height],
-            pixels_per_point: self.window().scale_factor() as f32,
-        };
-
-        self.egui.draw(
-            &self.device,
-            &self.queue,
-            &mut encoder,
-            &self.window,
-            &view,
-            screen_descriptor,
-            |ui| GUI(ui),
-        );
-
         self.queue.submit(iter::once(encoder.finish()));
         output.present();
+
+        // thread::sleep(Duration::from_millis(200));
+
+        if (self.compute_toggle) {
+            self.compute_toggle = false
+        } else {
+            self.compute_toggle = true
+        }
 
         Ok(())
     }
@@ -336,26 +579,13 @@ pub async fn run() {
     }
 
     let event_loop = EventLoop::new().unwrap();
-    let window = WindowBuilder::new().build(&event_loop).unwrap();
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        // Winit prevents sizing with CSS, so we have to set
-        // the size manually when on web.
-        use winit::dpi::PhysicalSize;
-        window.set_inner_size(PhysicalSize::new(450, 400));
-
-        use winit::platform::web::WindowExtWebSys;
-        web_sys::window()
-            .and_then(|win| win.document())
-            .and_then(|doc| {
-                let dst = doc.get_element_by_id("wasm-example")?;
-                let canvas = web_sys::Element::from(window.canvas());
-                dst.append_child(&canvas).ok()?;
-                Some(())
-            })
-            .expect("Couldn't append canvas to document body.");
-    }
+    let window = WindowBuilder::new()
+        .with_inner_size(winit::dpi::PhysicalSize {
+            width: WINDOW_SIZE,
+            height: WINDOW_SIZE,
+        })
+        .build(&event_loop)
+        .unwrap();
 
     // State::new uses async code, so we're going to wait for it to finish
     let mut state = State::new(window).await;
@@ -397,7 +627,6 @@ pub async fn run() {
 
                     _ => {}
                 };
-                state.egui.handle_input(&mut state.window, &event);
             }
         }
         _ => {}
