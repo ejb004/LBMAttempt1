@@ -51,8 +51,9 @@ fn isInSphere(x: f32, y: f32) -> bool {
     let dx = x - uniforms.sphere_x;
     let dy = y - uniforms.sphere_y;
     let distance_squared = dx * dx + dy * dy;
-    return distance_squared <= uniforms.sphere_r * uniforms.sphere_r;
+    return distance_squared <= uniforms.sphere_r * (uniforms.sphere_r+dx/2.0);
 }
+
 
 // Modified boundary condition check
 fn applyBoundaryConditions(x: u32, y: u32) -> bool {
@@ -65,16 +66,16 @@ fn applyBoundaryConditions(x: u32, y: u32) -> bool {
     return isInSphere(f32(x), f32(y));
 }
 
-fn getInletVelocity(y: f32) -> f32 {
-    let h = f32(uniforms.nodes_y);
-    let y_normalized = y / h;
-    // Parabolic profile: zero at walls, maximum at center
-    return uniforms.inlet_velocity * 4.0 * y_normalized * (1.0 - y_normalized);
-}
-
 // fn getInletVelocity(y: f32) -> f32 {
-//     return uniforms.inlet_velocity;
+//     let h = f32(uniforms.nodes_y);
+//     let y_normalized = y / h;
+//     // Parabolic profile: zero at walls, maximum at center
+//     return uniforms.inlet_velocity * 4.0 * y_normalized * (1.0 - y_normalized);
 // }
+
+fn getInletVelocity(y: f32) -> f32 {
+    return uniforms.inlet_velocity;
+}
 
 @compute @workgroup_size(8, 8)
 fn cs_main(@builtin(global_invocation_id) global_id: vec3<u32>) {

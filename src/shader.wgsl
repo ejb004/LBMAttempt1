@@ -109,8 +109,10 @@ fn getColor(value: f32, min_val: f32, max_val: f32) -> vec3<f32> {
 fn isInSphere(pos: vec2<f32>) -> bool {
     let dx = pos.x - uniforms.sphere_x;
     let dy = pos.y - uniforms.sphere_y;
-    return (dx * dx + dy * dy) <= (uniforms.sphere_r * uniforms.sphere_r);
+
+    return (dx * dx + dy * dy) <= (uniforms.sphere_r * uniforms.sphere_r); //sphere
 }
+
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -125,24 +127,39 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Get macroscopic quantities
     let macro_v = getMacroscopic(x, y);
     var value: f32;
+
+    var colour = getColor(0.0,0.0,1.0); 
     
     switch(uniforms.mode) {
         case 0u: {
             // Velocity magnitude
             value = sqrt(macro_v.y * macro_v.y + macro_v.z * macro_v.z);
+            colour = getColor(value, uniforms.min_value, uniforms.max_value);
         }
         case 1u: {
             // Vorticity
-            value = getVorticity(x, y);
+            value = (getVorticity(x, y) * 20.0) * macro_v.x;
+            colour = getColor(abs(value), uniforms.min_value, uniforms.max_value);
+            if value < 0.0 {
+                colour.x = 0.0;
+            } else {
+                colour.y = 0.0;
+            }
+
+            colour.z = 0.0;
+            
+
+            
         }
         default: {
             // Density
             value = macro_v.x;
+            colour = getColor(value, uniforms.min_value, uniforms.max_value);
         }
     }
     
-    let color = getColor(value, uniforms.min_value, uniforms.max_value);
-    return vec4<f32>(color, 1.0);
+    
+    return vec4<f32>(colour, 1.0);
 }
 
 // @fragment

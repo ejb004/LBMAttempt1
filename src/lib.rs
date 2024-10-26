@@ -14,12 +14,14 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-const NX: u32 = 1024;
-const NY: u32 = 512;
+const NX: u32 = 512;
+const NY: u32 = 256;
 const NZ: u32 = 1;
 const NODES: u32 = NX * NY * NZ;
 const WORKGROUP_SIZE: u32 = 8;
 const WINDOW_SIZE: u32 = 2048;
+
+const SUBSTEPS: u32 = 8;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -97,7 +99,7 @@ impl FrameRateCounter {
         self.frame_count += 1;
 
         // Update and print FPS every 1 second
-        if now.duration_since(self.last_print_time).as_secs_f32() >= 1.0 {
+        if now.duration_since(self.last_print_time).as_secs_f32() >= 5.0 {
             self.fps = self.frame_count as f32;
             println!("FPS: {:.2}", self.fps);
             self.frame_count = 0;
@@ -153,6 +155,8 @@ struct State {
 
     render_bg: wgpu::BindGroup,
     frame_rate_counter: FrameRateCounter,
+
+    count: u32,
 }
 
 impl State {
@@ -228,7 +232,7 @@ impl State {
         let uniform = Params {
             nodes_x: NX,
             nodes_y: NY,
-            sphere_x: NX as f32 / 4.0,
+            sphere_x: NX as f32 / 8.0,
             sphere_y: NY as f32 / 2.0,
             sphere_r: NY as f32 / 10.0,
             inlet_vel: 0.1,
@@ -243,12 +247,12 @@ impl State {
         let visualise_uniform = VisualisationUniforms {
             nodes_x: NX,
             nodes_y: NY,
-            sphere_x: NX as f32 / 4.0,
-            sphere_y: NY as f32 / 2.0,
+            sphere_x: uniform.sphere_x,
+            sphere_y: uniform.sphere_y,
             sphere_r: uniform.sphere_r,
             mode: 0, // 0: velocity magnitude, 1: vorticity, 2: density
             min_value: 0.0,
-            max_value: 0.15,
+            max_value: 0.3,
         };
 
         let visualise_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -503,6 +507,7 @@ impl State {
 
             render_bg,
             frame_rate_counter,
+            count: 0,
         }
     }
 
@@ -569,46 +574,54 @@ impl State {
             compute_pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
         }
 
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-            });
+        if self.count % SUBSTEPS == 0 {
+            {
+                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Render Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.1,
+                                g: 0.2,
+                                b: 0.3,
+                                a: 1.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    occlusion_query_set: None,
+                    timestamp_writes: None,
+                });
 
-            render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_bind_group(0, &self.render_bg, &[]);
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+                render_pass.set_pipeline(&self.render_pipeline);
+                render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                render_pass.set_bind_group(0, &self.render_bg, &[]);
+                render_pass
+                    .set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+            }
         }
 
         self.queue.submit(iter::once(encoder.finish()));
-        output.present();
+        if self.count % SUBSTEPS == 0 {
+            output.present();
+            self.count = 0;
+        }
 
         // thread::sleep(Duration::from_millis(200));
 
-        if (self.compute_toggle) {
+        if self.compute_toggle {
             self.compute_toggle = false
         } else {
             self.compute_toggle = true
         }
 
         self.frame_rate_counter.update();
+
+        self.count += 1;
 
         Ok(())
     }
@@ -652,7 +665,10 @@ pub async fn run() {
                                 ..
                             },
                         ..
-                    } => ewlt.exit(),
+                    } => {
+                        println!("{}", state.count);
+                        ewlt.exit()
+                    }
                     WindowEvent::Resized(physical_size) => {
                         state.resize(*physical_size);
                     }
