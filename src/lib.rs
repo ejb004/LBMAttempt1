@@ -1,8 +1,10 @@
 use std::time::{Duration, Instant};
 use std::{iter, thread};
 
+mod boundary;
 mod node;
 
+use boundary::BoundaryNode;
 use node::Node;
 use rand::Rng;
 use wgpu::{util::DeviceExt, BindGroupLayoutDescriptor};
@@ -250,7 +252,7 @@ impl State {
             sphere_x: uniform.sphere_x,
             sphere_y: uniform.sphere_y,
             sphere_r: uniform.sphere_r,
-            mode: 0, // 0: velocity magnitude, 1: vorticity, 2: density
+            mode: 1, // 0: velocity magnitude, 1: vorticity, 2: density
             min_value: 0.0,
             max_value: 0.3,
         };
@@ -261,12 +263,7 @@ impl State {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // COMPUTE SHADER ----------------------------------------------------------------------------------------------------
-
-        let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Compute Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("compute3.wgsl").into()),
-        });
+        // COMPUTTATIONAL SETUP ======================================================================= //
 
         let nodes: Vec<Node> = (0..NODES)
             .map(|i| {
@@ -276,6 +273,29 @@ impl State {
                 Node::with_density(1.0 + y / 20.0)
             })
             .collect();
+
+        // boundaries
+        let mut boundaries: Vec<BoundaryNode> = Vec::new();
+
+        let center_x = NX as f32 / 4.0;
+        let center_y = NY as f32 / 2.0;
+        let radius = 10.0;
+
+        // Only store the nodes that make up the circle's surface
+        for angle in 0..360 {
+            let rad = angle as f32 * std::f32::consts::PI / 180.0;
+            let x = (center_x + radius * rad.cos()) as u32;
+            let y = (center_y + radius * rad.sin()) as u32;
+
+            boundaries.push(BoundaryNode::new(x, y, NX));
+        }
+
+        // COMPUTE SHADER ----------------------------------------------------------------------------------------------------
+
+        let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Compute Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("compute3.wgsl").into()),
+        });
 
         let compute_buffer0 = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Compute Buffer 00"),
@@ -287,6 +307,13 @@ impl State {
             label: Some("Compute Buffer 01"),
             contents: bytemuck::cast_slice(&nodes),
             usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        let boundary_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Boundary Buffer"),
+            size: (std::mem::size_of::<BoundaryNode>() * boundaries.len()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
         let compute_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -322,6 +349,16 @@ impl State {
                     },
                     count: None,
                 },
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -340,6 +377,10 @@ impl State {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: compute_buffer1.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: boundary_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -360,6 +401,10 @@ impl State {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: compute_buffer0.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: boundary_buffer.as_entire_binding(),
                 },
             ],
         });

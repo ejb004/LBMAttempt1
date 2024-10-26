@@ -16,6 +16,8 @@ struct Uniforms {
 // Define storage buffer 2 (output)
 @group(0) @binding(2) var<storage, read_write> outputBuffer: array<f32>;
 
+@group(0) @binding(3) var<storage, read> boundaryBuffer: array<f32>;
+
 // D2Q9 velocity vectors stored as var arrays for dynamic access
 var<private> c_x: array<f32, 9> = array<f32, 9>(
     0.0,  1.0,  0.0, -1.0,  0.0,  1.0, -1.0, -1.0,  1.0
@@ -51,7 +53,8 @@ fn isInSphere(x: f32, y: f32) -> bool {
     let dx = x - uniforms.sphere_x;
     let dy = y - uniforms.sphere_y;
     let distance_squared = dx * dx + dy * dy;
-    return distance_squared <= uniforms.sphere_r * (uniforms.sphere_r+dx/2.0);
+    let rad_squared = uniforms.sphere_r * uniforms.sphere_r;
+    return (distance_squared <= rad_squared && distance_squared > rad_squared / 2.0);
 }
 
 
@@ -154,60 +157,3 @@ fn cs_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         outputBuffer[getIndex(x, y, i)] = f;
     }
 }
-
-// @compute @workgroup_size(8, 8)
-// fn cs_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-//     let x = global_id.x;
-//     let y = global_id.y;
-    
-//     // Check bounds
-//     if (x >= uniforms.nodes_x || y >= uniforms.nodes_y) {
-//         return;
-//     }
-
-//     // Handle boundary conditions
-//     if (applyBoundaryConditions(x, y)) {
-//         // Simple bounce-back
-//         for (var i = 0u; i < 9u; i++) {
-//             let opposite = (i + 4u) % 8u;  // Get opposite direction
-//             if (i == 0u) {
-//                 outputBuffer[getIndex(x, y, i)] = inputBuffer[getIndex(x, y, i)];
-//             } else {
-//                 outputBuffer[getIndex(x, y, i)] = inputBuffer[getIndex(x, y, opposite)];
-//             }
-//         }
-//         return;
-//     }
-
-//     // Compute macroscopic variables
-//     var density = 0.0;
-//     var momentum_x = 0.0;
-//     var momentum_y = 0.0;
-
-//     for (var i = 0u; i < 9u; i++) {
-//         let f = inputBuffer[getIndex(x, y, i)];
-//         density += f;
-//         momentum_x += c_x[i] * f;
-//         momentum_y += c_y[i] * f;
-//     }
-
-//     let ux = momentum_x / density;
-//     let uy = momentum_y / density;
-
-//     // Collision step
-//     for (var i = 0u; i < 9u; i++) {
-//         let feq = computeEquilibrium(density, ux, uy, i);
-//         let f = inputBuffer[getIndex(x, y, i)];
-        
-//         // Streaming step (propagate to neighboring nodes)
-//         let stream_x = i32(x) + i32(c_x[i]);
-//         let stream_y = i32(y) + i32(c_y[i]);
-        
-//         // Only stream if within bounds
-//         if (stream_x >= 0 && stream_x < i32(uniforms.nodes_x) &&
-//             stream_y >= 0 && stream_y < i32(uniforms.nodes_y)) {
-//             let new_f = f - omega * (f - feq);
-//             outputBuffer[getIndex(u32(stream_x), u32(stream_y), i)] = new_f;
-//         }
-//     }
-// }

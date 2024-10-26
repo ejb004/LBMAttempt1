@@ -109,8 +109,9 @@ fn getColor(value: f32, min_val: f32, max_val: f32) -> vec3<f32> {
 fn isInSphere(pos: vec2<f32>) -> bool {
     let dx = pos.x - uniforms.sphere_x;
     let dy = pos.y - uniforms.sphere_y;
-
-    return (dx * dx + dy * dy) <= (uniforms.sphere_r * uniforms.sphere_r); //sphere
+    let distance_squared = dx * dx + dy * dy;
+    let rad_squared = uniforms.sphere_r * uniforms.sphere_r;
+    return (distance_squared <= rad_squared && distance_squared > rad_squared / 2.0);
 }
 
 
@@ -148,14 +149,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             colour.z = 0.0;
             
-
-            
         }
         default: {
             // Density
             value = macro_v.x;
-            colour = getColor(value, uniforms.min_value, uniforms.max_value);
+            colour = getColor(value, uniforms.min_value, uniforms.max_value * 20.0);
+
+
         }
+            
     }
     
     
