@@ -5,14 +5,15 @@ struct VisualisationUniforms {
     mode: u32,          // 0: velocity magnitude, 1: vorticity, 2: density
     min_value: f32,     // For color scaling
     max_value: f32,
-    sphere_x: f32,      // For obstacle visualization
-    sphere_y: f32,
-    sphere_r: f32,
+    boundary_nodes: u32,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: VisualisationUniforms;
 // Define storage buffer 1 (input)
 @group(0) @binding(1) var<storage, read> compute_buffer: array<f32>;
+
+@group(0) @binding(2) var<storage, read> boundaryBuffer: array<u32>;
+
 
 // Vertex shader
 
@@ -105,31 +106,24 @@ fn getColor(value: f32, min_val: f32, max_val: f32) -> vec3<f32> {
     }
 }
 
-// Check if point is in obstacle
-fn isInSphere(pos: vec2<f32>) -> bool {
-    let dx = pos.x - uniforms.sphere_x;
-    let dy = pos.y - uniforms.sphere_y;
-    let distance_squared = dx * dx + dy * dy;
-    let rad_squared = uniforms.sphere_r * uniforms.sphere_r;
-    return (distance_squared <= rad_squared && distance_squared > rad_squared / 2.0);
-}
-
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let x = u32(in.uv.x * f32(uniforms.nodes_x));
     let y = u32(in.uv.y * f32(uniforms.nodes_y));
-    
-    // Check if point is in obstacle
-    if (isInSphere(vec2<f32>(f32(x), f32(y)))) {
-        return vec4<f32>(0.2, 0.2, 0.2, 1.0);  // Gray for obstacle
-    }
 
     // Get macroscopic quantities
     let macro_v = getMacroscopic(x, y);
     var value: f32;
 
     var colour = getColor(0.0,0.0,1.0); 
+
+    for (var i = 0u; i < uniforms.boundary_nodes; i += 1u) {
+      if (uniforms.nodes_x * y + x == boundaryBuffer[i]) {
+        return vec4<f32>(1.0,1.0,1.0,1.0);
+      }
+    }
+
     
     switch(uniforms.mode) {
         case 0u: {

@@ -119,10 +119,8 @@ impl FrameRateCounter {
 struct Params {
     nodes_x: u32,
     nodes_y: u32,
-    sphere_x: f32,
-    sphere_y: f32,
-    sphere_r: f32,
     inlet_vel: f32,
+    boundary_nodes: u32,
 }
 
 #[repr(C)]
@@ -133,9 +131,7 @@ struct VisualisationUniforms {
     mode: u32,
     min_value: f32,
     max_value: f32,
-    sphere_x: f32,
-    sphere_y: f32,
-    sphere_r: f32,
+    boundary_nodes: u32,
 }
 
 struct State {
@@ -231,39 +227,6 @@ impl State {
 
         // ------------------- UNIFORM =---------------------------------------------------- ----------------------------  //
         // UNIFORM -------------
-        let uniform = Params {
-            nodes_x: NX,
-            nodes_y: NY,
-            sphere_x: NX as f32 / 8.0,
-            sphere_y: NY as f32 / 2.0,
-            sphere_r: NY as f32 / 10.0,
-            inlet_vel: 0.1,
-        };
-
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[uniform]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let visualise_uniform = VisualisationUniforms {
-            nodes_x: NX,
-            nodes_y: NY,
-            sphere_x: uniform.sphere_x,
-            sphere_y: uniform.sphere_y,
-            sphere_r: uniform.sphere_r,
-            mode: 1, // 0: velocity magnitude, 1: vorticity, 2: density
-            min_value: 0.0,
-            max_value: 0.3,
-        };
-
-        let visualise_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Visual Buffer"),
-            contents: bytemuck::cast_slice(&[visualise_uniform]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        // COMPUTTATIONAL SETUP ======================================================================= //
 
         let nodes: Vec<Node> = (0..NODES)
             .map(|i| {
@@ -277,18 +240,53 @@ impl State {
         // boundaries
         let mut boundaries: Vec<BoundaryNode> = Vec::new();
 
-        let center_x = NX as f32 / 4.0;
-        let center_y = NY as f32 / 2.0;
-        let radius = 10.0;
+        let center_x = (NX / 4) as f32;
+        let center_y = (NY / 2) as f32;
+        let radius = 50.0;
+        let angles = 30;
 
         // Only store the nodes that make up the circle's surface
-        for angle in 0..360 {
-            let rad = angle as f32 * std::f32::consts::PI / 180.0;
+        let mut indicies: Vec<u32> = Vec::new();
+        for angle in 0..angles {
+            let rad = (angle as f32 / angles as f32) * 360.0 * std::f32::consts::PI / 180.0;
             let x = (center_x + radius * rad.cos()) as u32;
             let y = (center_y + radius * rad.sin()) as u32;
 
-            boundaries.push(BoundaryNode::new(x, y, NX));
+            let n = BoundaryNode::new(x, y, NX).index;
+
+            if !indicies.contains(&n) {
+                boundaries.push(BoundaryNode::new(x, y, NX));
+            }
         }
+        let uniform = Params {
+            nodes_x: NX,
+            nodes_y: NY,
+            inlet_vel: 0.1,
+            boundary_nodes: boundaries.len() as u32,
+        };
+
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Uniform Buffer"),
+            contents: bytemuck::cast_slice(&[uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let visualise_uniform = VisualisationUniforms {
+            nodes_x: NX,
+            nodes_y: NY,
+            mode: 0, // 0: velocity magnitude, 1: vorticity, 2: density
+            min_value: 0.0,
+            max_value: 0.3,
+            boundary_nodes: boundaries.len() as u32,
+        };
+
+        let visualise_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Visual Buffer"),
+            contents: bytemuck::cast_slice(&[visualise_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // COMPUTTATIONAL SETUP ======================================================================= //
 
         // COMPUTE SHADER ----------------------------------------------------------------------------------------------------
 
@@ -309,11 +307,10 @@ impl State {
             usage: wgpu::BufferUsages::STORAGE,
         });
 
-        let boundary_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        let boundary_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Boundary Buffer"),
-            size: (std::mem::size_of::<BoundaryNode>() * boundaries.len()) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+            contents: bytemuck::cast_slice(&boundaries),
+            usage: wgpu::BufferUsages::STORAGE,
         });
 
         let compute_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -453,6 +450,16 @@ impl State {
                     },
                     count: None,
                 },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -467,6 +474,10 @@ impl State {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: compute_buffer1.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: boundary_buffer.as_entire_binding(),
                 },
             ],
         });

@@ -1,6 +1,7 @@
 #[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct BoundaryNode {
-    index: u32,
+    pub index: u32,
 }
 
 impl BoundaryNode {
