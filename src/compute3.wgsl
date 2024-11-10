@@ -16,6 +16,17 @@ struct Uniforms {
 
 @group(0) @binding(3) var<storage, read> boundaryBuffer: array<u32>;
 
+fn get_bool(index: u32) -> bool {
+    let array_index = index >> 5u;    // Divide by 32 (index / 32)
+    let bit_index = index & 31u;      // Modulo 32 (index % 32)
+    return (boundaryBuffer[array_index] & (1u << bit_index)) != 0u;
+}
+
+fn get_bool_2d(x: u32, y: u32) -> bool {
+    let index = y * uniforms.nodes_x + x;
+    return get_bool(index);
+}
+
 // D2Q9 velocity vectors stored as var arrays for dynamic access
 var<private> c_x: array<f32, 9> = array<f32, 9>(
     0.0,  1.0,  0.0, -1.0,  0.0,  1.0, -1.0, -1.0,  1.0
@@ -53,25 +64,23 @@ fn applyBoundaryConditions(x: u32, y: u32) -> bool {
         return true;
     }
     
-    for (var i = 0u; i < uniforms.boundary_nodes; i += 1u) {
-      if (uniforms.nodes_x * y + x == boundaryBuffer[i]) {
+   if(get_bool_2d(x,y)) {
         return true;
-      }
-    }
+   }
 
     return false;
 }
 
-// fn getInletVelocity(y: f32) -> f32 {
-//     let h = f32(uniforms.nodes_y);
-//     let y_normalized = y / h;
-//     // Parabolic profile: zero at walls, maximum at center
-//     return uniforms.inlet_velocity * 4.0 * y_normalized * (1.0 - y_normalized);
-// }
-
 fn getInletVelocity(y: f32) -> f32 {
-    return uniforms.inlet_velocity;
+    let h = f32(uniforms.nodes_y);
+    let y_normalized = y / h;
+    // Parabolic profile: zero at walls, maximum at center
+    return uniforms.inlet_velocity * 4.0 * y_normalized * (1.0 - y_normalized);
 }
+
+// fn getInletVelocity(y: f32) -> f32 {
+//     return uniforms.inlet_velocity;
+// }
 
 @compute @workgroup_size(8, 8)
 fn cs_main(@builtin(global_invocation_id) global_id: vec3<u32>) {

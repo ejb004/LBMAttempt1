@@ -16,14 +16,14 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-const NX: u32 = 512;
-const NY: u32 = 256;
+const NX: u32 = 256 * 2;
+const NY: u32 = 128 * 2;
 const NZ: u32 = 1;
 const NODES: u32 = NX * NY * NZ;
 const WORKGROUP_SIZE: u32 = 8;
 const WINDOW_SIZE: u32 = 2048;
 
-const SUBSTEPS: u32 = 8;
+const SUBSTEPS: u32 = 16;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -240,24 +240,36 @@ impl State {
         // boundaries
         let mut boundaries: Vec<BoundaryNode> = Vec::new();
 
+        let mut boundary_array = [false; (NX * NY) as usize];
+
         let center_x = (NX / 4) as f32;
         let center_y = (NY / 2) as f32;
-        let radius = 50.0;
-        let angles = 30;
+        let radius = 20.0;
+        let angles = 360;
 
         // Only store the nodes that make up the circle's surface
         let mut indicies: Vec<u32> = Vec::new();
         for angle in 0..angles {
             let rad = (angle as f32 / angles as f32) * 360.0 * std::f32::consts::PI / 180.0;
-            let x = (center_x + radius * rad.cos()) as u32;
-            let y = (center_y + radius * rad.sin()) as u32;
+            let x = (center_x + radius * rad.cos() * 2.0) as u32;
+            let y = (center_y + radius * rad.sin() * (0.5 * rad).sin().powf(1.0)) as u32;
 
-            let n = BoundaryNode::new(x, y, NX).index;
-
-            if !indicies.contains(&n) {
-                boundaries.push(BoundaryNode::new(x, y, NX));
-            }
+            boundary_array[(x + y * NX) as usize] = true;
         }
+
+        let packed_boundaries: Vec<u32> = boundary_array
+            .chunks(32)
+            .map(|chunk| {
+                let mut packed = 0u32;
+                for (i, &b) in chunk.iter().enumerate() {
+                    if b {
+                        packed |= 1 << i;
+                    }
+                }
+                packed
+            })
+            .collect();
+
         let uniform = Params {
             nodes_x: NX,
             nodes_y: NY,
@@ -274,10 +286,10 @@ impl State {
         let visualise_uniform = VisualisationUniforms {
             nodes_x: NX,
             nodes_y: NY,
-            mode: 0, // 0: velocity magnitude, 1: vorticity, 2: density
+            mode: 1, // 0: velocity magnitude, 1: vorticity, 2: density set mode
             min_value: 0.0,
             max_value: 0.3,
-            boundary_nodes: boundaries.len() as u32,
+            boundary_nodes: boundary_array.len() as u32,
         };
 
         let visualise_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -309,7 +321,7 @@ impl State {
 
         let boundary_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Boundary Buffer"),
-            contents: bytemuck::cast_slice(&boundaries),
+            contents: bytemuck::cast_slice(&packed_boundaries),
             usage: wgpu::BufferUsages::STORAGE,
         });
 

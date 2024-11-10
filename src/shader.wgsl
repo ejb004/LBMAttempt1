@@ -47,6 +47,17 @@ var<private> c_y: array<f32, 9> = array<f32, 9>(
     0.0,  0.0,  1.0,  0.0, -1.0,  1.0,  1.0, -1.0, -1.0
 );
 
+fn get_bool(index: u32) -> bool {
+    let array_index = index >> 5u;    // Divide by 32 (index / 32)
+    let bit_index = index & 31u;      // Modulo 32 (index % 32)
+    return (boundaryBuffer[array_index] & (1u << bit_index)) != 0u;
+}
+
+fn get_bool_2d(x: u32, y: u32) -> bool {
+    let index = y * uniforms.nodes_x + x;
+    return get_bool(index);
+}
+
 fn getIndex(x: u32, y: u32, direction: u32) -> u32 {
     return (y * uniforms.nodes_x + x) * 9u + direction;
 }
@@ -118,11 +129,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     var colour = getColor(0.0,0.0,1.0); 
 
-    for (var i = 0u; i < uniforms.boundary_nodes; i += 1u) {
-      if (uniforms.nodes_x * y + x == boundaryBuffer[i]) {
+    if(get_bool_2d(x,y)) {
         return vec4<f32>(1.0,1.0,1.0,1.0);
-      }
-    }
+   }
 
     
     switch(uniforms.mode) {
@@ -144,6 +153,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             colour.z = 0.0;
             
         }
+
         default: {
             // Density
             value = macro_v.x;
