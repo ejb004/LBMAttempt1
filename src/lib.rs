@@ -23,7 +23,7 @@ const NODES: u32 = NX * NY * NZ;
 const WORKGROUP_SIZE: u32 = 8;
 const WINDOW_SIZE: u32 = 2048;
 
-const SUBSTEPS: u32 = 16;
+const SUBSTEPS: u32 = 32;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -155,6 +155,9 @@ struct State {
     frame_rate_counter: FrameRateCounter,
 
     count: u32,
+
+    visualise_buffer: wgpu::Buffer,
+    visualise_uniform: VisualisationUniforms,
 }
 
 impl State {
@@ -244,17 +247,32 @@ impl State {
 
         let center_x = (NX / 4) as f32;
         let center_y = (NY / 2) as f32;
-        let radius = 20.0;
+        let radius = 30.0;
         let angles = 360;
 
         // Only store the nodes that make up the circle's surface
         let mut indicies: Vec<u32> = Vec::new();
+        let rotation_angle = 0.0 * std::f32::consts::PI / 180.0; // 30 degrees in radians
+
         for angle in 0..angles {
             let rad = (angle as f32 / angles as f32) * 360.0 * std::f32::consts::PI / 180.0;
-            let x = (center_x + radius * rad.cos() * 2.0) as u32;
-            let y = (center_y + radius * rad.sin() * (0.5 * rad).sin().powf(1.0)) as u32;
 
-            boundary_array[(x + y * NX) as usize] = true;
+            // Base x and y values before rotation
+            let x = center_x + radius * rad.cos() * 2.0;
+
+            // Asymmetric thickness adjustment for y (top is thicker)
+            let asymmetry_factor = if rad.sin() >= 0.0 { 1.0 } else { 0.2 }; // Adjust to control thickness
+            let y = center_y + radius * rad.sin() * asymmetry_factor * (0.5 * rad).sin().powf(1.0);
+
+            // Apply rotation transformation
+            let rotated_x = (x - center_x) * rotation_angle.cos()
+                - (y - center_y) * rotation_angle.sin()
+                + center_x;
+            let rotated_y = (x - center_x) * rotation_angle.sin()
+                + (y - center_y) * rotation_angle.cos()
+                + center_y;
+
+            boundary_array[(rotated_x as u32 + rotated_y as u32 * NX) as usize] = true;
         }
 
         let packed_boundaries: Vec<u32> = boundary_array
@@ -576,11 +594,26 @@ impl State {
             render_bg,
             frame_rate_counter,
             count: 0,
+
+            visualise_buffer,
+            visualise_uniform,
         }
     }
 
     pub fn window(&self) -> &Window {
         &self.window
+    }
+
+    fn toggle_mode(&mut self) {
+        // Cycle through modes: 0 -> 1 -> 2 -> 0
+        self.visualise_uniform.mode = (self.visualise_uniform.mode + 1) % 3;
+
+        // Update the buffer with new uniform values
+        self.queue.write_buffer(
+            &self.visualise_buffer,
+            0,
+            bytemuck::cast_slice(&[self.visualise_uniform]),
+        );
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -737,6 +770,26 @@ pub async fn run() {
                         println!("{}", state.count);
                         ewlt.exit()
                     }
+                    WindowEvent::KeyboardInput {
+                        event:
+                            KeyEvent {
+                                logical_key: Key::Named(NamedKey::Space),
+                                state: ElementState::Pressed,
+                                ..
+                            },
+                        ..
+                    } => {
+                        // Cycle through modes: 0 -> 1 -> 2 -> 0
+                        state.visualise_uniform.mode = (state.visualise_uniform.mode + 1) % 3;
+
+                        // Update the buffer with new uniform values
+                        state.queue.write_buffer(
+                            &state.visualise_buffer,
+                            0,
+                            bytemuck::cast_slice(&[state.visualise_uniform]),
+                        );
+                    }
+
                     WindowEvent::Resized(physical_size) => {
                         state.resize(*physical_size);
                     }
