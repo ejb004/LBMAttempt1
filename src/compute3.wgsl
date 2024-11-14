@@ -101,9 +101,10 @@ fn handleMovingLid(x: u32, y: u32, i: u32) -> f32 {
     }
 
     // Set lid velocity
-    let u_lid = 0.2; // Lid velocity
+    let u_lid = 0.1; // Lid velocity
+    let v_lid = -0.0;
     let ux = u_lid;
-    let uy = 0.0;
+    let uy = v_lid;
 
     // Compute equilibrium with lid velocity
     return computeEquilibrium(density, ux, uy, i);
