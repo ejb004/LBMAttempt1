@@ -1,8 +1,9 @@
 use std::time::{Duration, Instant};
-use std::{iter, thread};
+use std::{fs, iter, thread};
 
 mod boundary;
 mod node;
+mod saving_data;
 
 use boundary::BoundaryNode;
 use node::Node;
@@ -16,14 +17,14 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-const NX: u32 = 256 * 2;
-const NY: u32 = 128 * 2;
+const NX: u32 = 256 + 2;
+const NY: u32 = 256 + 2;
 const NZ: u32 = 1;
 const NODES: u32 = NX * NY * NZ;
 const WORKGROUP_SIZE: u32 = 8;
 const WINDOW_SIZE: u32 = 2048;
 
-const SUBSTEPS: u32 = 32;
+const SUBSTEPS: u32 = 256;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -79,6 +80,7 @@ struct FrameRateCounter {
     last_print_time: Instant,
     frame_count: u32,
     fps: f32,
+    iterations: u64,
 }
 
 impl FrameRateCounter {
@@ -89,6 +91,7 @@ impl FrameRateCounter {
             last_print_time: now,
             frame_count: 0,
             fps: 0.0,
+            iterations: 0,
         }
     }
 
@@ -101,9 +104,13 @@ impl FrameRateCounter {
         self.frame_count += 1;
 
         // Update and print FPS every 1 second
-        if now.duration_since(self.last_print_time).as_secs_f32() >= 5.0 {
+        if now.duration_since(self.last_print_time).as_secs_f32() >= 1.0 {
             self.fps = self.frame_count as f32;
-            println!("FPS: {:.2}", self.fps);
+            let glups = (NX * NY) as f32 * self.fps / 1000000000.0;
+            println!(
+                "FPS: {:.2}; Iterations: {:}; GLUPS: {:.3}",
+                self.fps, self.iterations, glups
+            );
             self.frame_count = 0;
             self.last_print_time = now;
         }
@@ -158,6 +165,8 @@ struct State {
 
     visualise_buffer: wgpu::Buffer,
     visualise_uniform: VisualisationUniforms,
+
+    compute_buffer0: wgpu::Buffer,
 }
 
 impl State {
@@ -236,7 +245,8 @@ impl State {
                 let mut rng = rand::thread_rng();
                 let y: f32 = rng.gen();
 
-                Node::with_density(1.0 + y / 20.0)
+                // Node::with_density(1.0 + y / 20.0)
+                Node::with_density(1.0)
             })
             .collect();
 
@@ -247,33 +257,33 @@ impl State {
 
         let center_x = (NX / 4) as f32;
         let center_y = (NY / 2) as f32;
-        let radius = 30.0;
+        let radius: f32 = 20.0;
         let angles = 360;
 
         // Only store the nodes that make up the circle's surface
         let mut indicies: Vec<u32> = Vec::new();
-        let rotation_angle = 0.0 * std::f32::consts::PI / 180.0; // 30 degrees in radians
+        let mut rotation_angle = -150.0 * std::f32::consts::PI / 180.0; // 30 degrees in radians
 
-        for angle in 0..angles {
-            let rad = (angle as f32 / angles as f32) * 360.0 * std::f32::consts::PI / 180.0;
+        // for angle in 0..angles {
+        //     let rad = (angle as f32 / angles as f32) * 360.0 * std::f32::consts::PI / 180.0;
 
-            // Base x and y values before rotation
-            let x = center_x + radius * rad.cos() * 2.0;
+        //     // Base x and y values before rotation
+        //     let x = center_x + radius * rad.cos() * 2.0;
 
-            // Asymmetric thickness adjustment for y (top is thicker)
-            let asymmetry_factor = if rad.sin() >= 0.0 { 1.0 } else { 0.2 }; // Adjust to control thickness
-            let y = center_y + radius * rad.sin() * asymmetry_factor * (0.5 * rad).sin().powf(1.0);
+        //     // Asymmetric thickness adjustment for y (top is thicker)
+        //     let asymmetry_factor = if rad.sin() >= 0.0 { 1.0 } else { 0.2 }; // Adjust to control thickness
+        //     let y = center_y + radius * rad.sin() * asymmetry_factor * (0.5 * rad).sin().powf(1.0);
 
-            // Apply rotation transformation
-            let rotated_x = (x - center_x) * rotation_angle.cos()
-                - (y - center_y) * rotation_angle.sin()
-                + center_x;
-            let rotated_y = (x - center_x) * rotation_angle.sin()
-                + (y - center_y) * rotation_angle.cos()
-                + center_y;
+        //     // Apply rotation transformation
+        //     let rotated_x = (x - center_x) * rotation_angle.cos()
+        //         - (y - center_y) * rotation_angle.sin()
+        //         + center_x;
+        //     let rotated_y = (x - center_x) * rotation_angle.sin()
+        //         + (y - center_y) * rotation_angle.cos()
+        //         + center_y;
 
-            boundary_array[(rotated_x as u32 + rotated_y as u32 * NX) as usize] = true;
-        }
+        //     boundary_array[(rotated_x as u32 + rotated_y as u32 * NX) as usize] = true;
+        // }
 
         let packed_boundaries: Vec<u32> = boundary_array
             .chunks(32)
@@ -320,15 +330,19 @@ impl State {
 
         // COMPUTE SHADER ----------------------------------------------------------------------------------------------------
 
+        let utils_shader = include_str!("utils.wgsl");
+        let compute_shader_string = include_str!("compute3.wgsl");
+        let combined_shader = format!("{}\n{}", utils_shader, compute_shader_string);
+
         let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Compute Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("compute3.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(combined_shader.into()),
         });
 
         let compute_buffer0 = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Compute Buffer 00"),
             contents: bytemuck::cast_slice(&nodes),
-            usage: wgpu::BufferUsages::STORAGE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         });
 
         let compute_buffer1 = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -597,6 +611,8 @@ impl State {
 
             visualise_buffer,
             visualise_uniform,
+
+            compute_buffer0,
         }
     }
 
@@ -673,6 +689,7 @@ impl State {
             let dispatch_y = (NY + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
 
             compute_pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
+            self.frame_rate_counter.iterations += 1;
         }
 
         if self.count % SUBSTEPS == 0 {
@@ -788,6 +805,23 @@ pub async fn run() {
                             0,
                             bytemuck::cast_slice(&[state.visualise_uniform]),
                         );
+                    }
+                    WindowEvent::KeyboardInput {
+                        event:
+                            KeyEvent {
+                                logical_key: Key::Named(NamedKey::ArrowUp),
+                                state: ElementState::Pressed,
+                                ..
+                            },
+                        ..
+                    } => {
+                        pollster::block_on(State::save_simulation_state(
+                            &state.device,
+                            &state.queue,
+                            &state.compute_buffer0,
+                            NX,
+                            NY,
+                        ));
                     }
 
                     WindowEvent::Resized(physical_size) => {

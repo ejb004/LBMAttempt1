@@ -13,7 +13,7 @@ pub const WEIGHTS: [f32; 9] = [
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Node {
-    distribution: [f32; 9],
+    pub distribution: [f32; 9],
 }
 
 impl Node {

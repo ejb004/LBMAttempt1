@@ -27,6 +27,7 @@ struct VertexOutput {
     @location(0) uv: vec2<f32>,
 };
 
+
 @vertex
 fn vs_main(
     model: VertexInput,
@@ -139,6 +140,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // Velocity magnitude
             value = sqrt(macro_v.y * macro_v.y + macro_v.z * macro_v.z);
             colour = getColor(value, uniforms.min_value, uniforms.max_value);
+            
+            // if value % 0.005 < 0.001 {
+                
+            // } else {
+            //     colour = vec3<f32>(0.0,0.0,0.0);
+            // }
         }
         case 1u: {
             // Vorticity
@@ -156,13 +163,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         default: {
             // Density
-            value = macro_v.x;
-            colour = getColor(value, uniforms.min_value, uniforms.max_value * 20.0);
+            value = pow(macro_v.x,2.0);
+            colour = getColor(abs(value), 0.99, 1.2);
 
 
         }
             
     }
+
+
     
     
     return vec4<f32>(colour, 1.0);
