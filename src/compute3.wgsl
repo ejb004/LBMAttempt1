@@ -1,8 +1,9 @@
 struct Uniforms {
     nodes_x: u32,
     nodes_y: u32,
-    inlet_velocity: f32, // Inlet flow velocity
+    inlet_velocity: vec2<f32>, // Inlet flow velocity
     boundary_nodes: u32,
+    walls: u32,
 };
 
 
@@ -15,8 +16,33 @@ struct Uniforms {
 @group(0) @binding(2) var<storage, read_write> outputBuffer: array<f32>;
 
 @group(0) @binding(3) var<storage, read> boundaryBuffer: array<u32>;
+
+// wall types
 const BOUNDARY_MOVING_LID = 1u;
 const BOUNDARY_NO_SLIP = 2u;
+const BOUNDARY_ZOUHE_INFLOW = 3u;
+// Define bit positions for each wall
+const NORTH_WALL_SHIFT: u32 = 0u;
+const SOUTH_WALL_SHIFT: u32 = 8u;
+const EAST_WALL_SHIFT: u32 = 16u;
+const WEST_WALL_SHIFT: u32 = 24u;
+
+// Wall type getters
+fn get_north_boundary() -> u32 {
+    return (uniforms.walls >> NORTH_WALL_SHIFT) & 0xFFu;
+}
+
+fn get_south_boundary() -> u32 {
+    return (uniforms.walls >> SOUTH_WALL_SHIFT) & 0xFFu;
+}
+
+fn get_east_boundary() -> u32 {
+    return (uniforms.walls >> EAST_WALL_SHIFT) & 0xFFu;
+}
+
+fn get_west_boundary() -> u32 {
+    return (uniforms.walls >> WEST_WALL_SHIFT) & 0xFFu;
+}
 
 
 fn get_bool(index: u32) -> bool {
@@ -34,11 +60,15 @@ fn get_bool_2d(x: u32, y: u32) -> bool {
 var<private> c_x: array<f32, 9> = array<f32, 9>(0.0, 1.0, 0.0, -1.0, 0.0, 1.0, -1.0, -1.0, 1.0);
 var<private> c_y: array<f32, 9> = array<f32, 9>(0.0, 0.0, 1.0, 0.0, -1.0, 1.0, 1.0, -1.0, -1.0);
 
+// 6 2 5
+// 3 0 1
+// 7 4 8
+
 // D2Q9 weights as var array
 var<private> w: array<f32, 9> = array<f32, 9>(4.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0);
 
 // Simulation parameters
-const tau = 0.6333; // Relaxation time
+const tau = 0.5666667; // Relaxation time
 const omega = 1.0 / tau; // Relaxation frequency
 
 // Helper function to get flattened array index
@@ -68,24 +98,54 @@ fn applyBoundaryConditions(x: u32, y: u32) -> bool {
 }
 
 fn getBoundaryType(x: u32, y: u32) -> u32 {
-    if (y == uniforms.nodes_y - 2u) {
-        return BOUNDARY_MOVING_LID;
-    } else if (y == 0u || x == 0u || x == uniforms.nodes_x - 1u) {
-        return BOUNDARY_NO_SLIP;
+    var wx = x;
+    var wy = y;
+
+    // Handle coordinate adjustments for moving walls independently
+    if get_north_boundary() == BOUNDARY_MOVING_LID && y == uniforms.nodes_y - 2u {
+        wy = uniforms.nodes_y - 1u;
     }
+    if get_south_boundary() == BOUNDARY_MOVING_LID && y == 1u {
+        wy = 0u;
+    }
+    if get_east_boundary() == BOUNDARY_MOVING_LID && x == uniforms.nodes_x - 2u {
+        wx = uniforms.nodes_x - 1u;
+    }
+    if (get_west_boundary() == BOUNDARY_MOVING_LID || get_west_boundary() == BOUNDARY_ZOUHE_INFLOW) && x == 1u {
+        wx = 0u;
+    }
+
+    // Check boundaries independently
+    if (wy == uniforms.nodes_y - 1u) {
+        return get_north_boundary();
+    } 
+    if (wy == 0u) {
+        return get_south_boundary();
+    } 
+    if (wx == 0u) {
+        return get_west_boundary();
+    } 
+    if (wx == uniforms.nodes_x - 1u) {
+        return get_east_boundary();
+    }
+    
     return 0u;
 }
 
-// fn getInletVelocity(y: f32) -> f32 {
-//     let h = f32(uniforms.nodes_y);
-//     let y_normalized = y / h;
-//     // Parabolic profile: zero at walls, maximum at center
-//     return uniforms.inlet_velocity * 4.0 * y_normalized * (1.0 - y_normalized);
+// fn getBoundaryType(x: u32, y: u32) -> u32 {
+//     if (y == uniforms.nodes_y - 2u) {
+//         if get_north_boundary() == BOUNDARY_MOVING_LID {
+//             return BOUNDARY_MOVING_LID ;
+//         }else {
+//             return BOUNDARY_NO_SLIP;
+//         }
+        
+//     } else if (y == 0u || x == 0u || x == uniforms.nodes_x - 1u) {
+//         return BOUNDARY_NO_SLIP;
+//     }
+//     return 0u;
 // }
 
-fn getInletVelocity(y: f32) -> f32 {
-    return uniforms.inlet_velocity;
-}
 
 fn handleMovingLid(x: u32, y: u32, i: u32) -> f32 {
     var density = 0.0;
@@ -101,10 +161,8 @@ fn handleMovingLid(x: u32, y: u32, i: u32) -> f32 {
     }
 
     // Set lid velocity
-    let u_lid = 0.1; // Lid velocity
-    let v_lid = -0.0;
-    let ux = u_lid;
-    let uy = v_lid;
+    let ux = uniforms.inlet_velocity.x;
+    let uy = uniforms.inlet_velocity.y;
 
     // Compute equilibrium with lid velocity
     return computeEquilibrium(density, ux, uy, i);
@@ -119,7 +177,7 @@ fn handleNoSlip(x: u32, y: u32, i: u32) -> f32 {
     return inputBuffer[getIndex(x, y, opposite)];
 }
 
-@compute @workgroup_size(8, 8)
+@compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let x = global_id.x;
     let y = global_id.y;
@@ -165,6 +223,8 @@ fn cs_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 f = handleMovingLid(x, y, i);
             }case BOUNDARY_NO_SLIP: {
                 f = handleNoSlip(x, y, i);
+            }case BOUNDARY_ZOUHE_INFLOW: {
+                f = handleWestInflow(x,y,i);
             }default: {
                 f = inputBuffer[getIndex(x, y, i)];
             }}

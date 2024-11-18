@@ -17,14 +17,15 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-const NX: u32 = 256 + 2;
-const NY: u32 = 256 + 2;
+const SCALE: u32 = 4; // 2 is default
+const NX: u32 = 64 * SCALE * 2;
+const NY: u32 = 64 * SCALE;
 const NZ: u32 = 1;
 const NODES: u32 = NX * NY * NZ;
-const WORKGROUP_SIZE: u32 = 8;
+const WORKGROUP_SIZE: u32 = 16;
 const WINDOW_SIZE: u32 = 2048;
 
-const SUBSTEPS: u32 = 256;
+const SUBSTEPS: u32 = 2_u32.pow(5);
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -126,8 +127,9 @@ impl FrameRateCounter {
 struct Params {
     nodes_x: u32,
     nodes_y: u32,
-    inlet_vel: f32,
+    inlet_vel: [f32; 2],
     boundary_nodes: u32,
+    walls: u32,
 }
 
 #[repr(C)]
@@ -174,6 +176,7 @@ impl State {
         let mut frame_rate_counter = FrameRateCounter::new();
 
         let size = window.inner_size();
+        window.focus_window();
 
         // The instance is a handle to our GPU
         // BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
@@ -243,10 +246,17 @@ impl State {
         let nodes: Vec<Node> = (0..NODES)
             .map(|i| {
                 let mut rng = rand::thread_rng();
-                let y: f32 = rng.gen();
+                let f: f32 = rng.gen();
 
                 // Node::with_density(1.0 + y / 20.0)
-                Node::with_density(1.0)
+
+                let x = i % NX;
+                let y = i / NX;
+                if x <= 1 || x >= NX - 2 || y <= 1 || y >= NY - 2 {
+                    Node::with_density(1.0)
+                } else {
+                    Node::with_density(1.0 + f / 100.0)
+                }
             })
             .collect();
 
@@ -262,28 +272,28 @@ impl State {
 
         // Only store the nodes that make up the circle's surface
         let mut indicies: Vec<u32> = Vec::new();
-        let mut rotation_angle = -150.0 * std::f32::consts::PI / 180.0; // 30 degrees in radians
+        let mut rotation_angle = -30.0 * std::f32::consts::PI / 180.0; // 30 degrees in radians
 
-        // for angle in 0..angles {
-        //     let rad = (angle as f32 / angles as f32) * 360.0 * std::f32::consts::PI / 180.0;
+        for angle in 0..angles {
+            let rad = (angle as f32 / angles as f32) * 360.0 * std::f32::consts::PI / 180.0;
 
-        //     // Base x and y values before rotation
-        //     let x = center_x + radius * rad.cos() * 2.0;
+            // Base x and y values before rotation
+            let x = center_x + radius * rad.cos() * 2.0;
 
-        //     // Asymmetric thickness adjustment for y (top is thicker)
-        //     let asymmetry_factor = if rad.sin() >= 0.0 { 1.0 } else { 0.2 }; // Adjust to control thickness
-        //     let y = center_y + radius * rad.sin() * asymmetry_factor * (0.5 * rad).sin().powf(1.0);
+            // Asymmetric thickness adjustment for y (top is thicker)
+            let asymmetry_factor = if rad.sin() >= 0.0 { 1.0 } else { 0.2 }; // Adjust to control thickness
+            let y = center_y + radius * rad.sin() * asymmetry_factor * (0.5 * rad).sin().powf(1.0);
 
-        //     // Apply rotation transformation
-        //     let rotated_x = (x - center_x) * rotation_angle.cos()
-        //         - (y - center_y) * rotation_angle.sin()
-        //         + center_x;
-        //     let rotated_y = (x - center_x) * rotation_angle.sin()
-        //         + (y - center_y) * rotation_angle.cos()
-        //         + center_y;
+            // Apply rotation transformation
+            let rotated_x = (x - center_x) * rotation_angle.cos()
+                - (y - center_y) * rotation_angle.sin()
+                + center_x;
+            let rotated_y = (x - center_x) * rotation_angle.sin()
+                + (y - center_y) * rotation_angle.cos()
+                + center_y;
 
-        //     boundary_array[(rotated_x as u32 + rotated_y as u32 * NX) as usize] = true;
-        // }
+            boundary_array[(rotated_x as u32 + rotated_y as u32 * NX) as usize] = true;
+        }
 
         let packed_boundaries: Vec<u32> = boundary_array
             .chunks(32)
@@ -301,8 +311,9 @@ impl State {
         let uniform = Params {
             nodes_x: NX,
             nodes_y: NY,
-            inlet_vel: 0.1,
+            inlet_vel: [0.1, 0.0],
             boundary_nodes: boundaries.len() as u32,
+            walls: crate::boundary::pack_LDC(),
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -314,7 +325,7 @@ impl State {
         let visualise_uniform = VisualisationUniforms {
             nodes_x: NX,
             nodes_y: NY,
-            mode: 1, // 0: velocity magnitude, 1: vorticity, 2: density set mode
+            mode: 0, // 0: velocity magnitude, 1: vorticity, 2: density set mode
             min_value: 0.0,
             max_value: 0.3,
             boundary_nodes: boundary_array.len() as u32,
@@ -330,9 +341,9 @@ impl State {
 
         // COMPUTE SHADER ----------------------------------------------------------------------------------------------------
 
-        let utils_shader = include_str!("utils.wgsl");
+        let utils_shader = include_str!("zou_he.wgsl");
         let compute_shader_string = include_str!("compute3.wgsl");
-        let combined_shader = format!("{}\n{}", utils_shader, compute_shader_string);
+        let combined_shader = format!("{}\n{}", compute_shader_string, utils_shader);
 
         let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Compute Shader"),
@@ -517,7 +528,7 @@ impl State {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: compute_buffer1.as_entire_binding(),
+                    resource: compute_buffer0.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
