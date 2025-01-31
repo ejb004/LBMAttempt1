@@ -1,3 +1,4 @@
+use std::f32::consts::LN_10;
 use std::time::{Duration, Instant};
 use std::{fs, iter, thread};
 
@@ -5,7 +6,8 @@ mod boundary;
 mod node;
 mod saving_data;
 
-use boundary::BoundaryNode;
+use boundary::{is_point_in_letter, BoundaryNode};
+use image::ImageReader;
 use node::Node;
 use rand::Rng;
 use wgpu::{util::DeviceExt, BindGroupLayoutDescriptor};
@@ -17,7 +19,7 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-const SCALE: u32 = 4; // 2 is default
+const SCALE: u32 = 6; // 2 is default
 const NX: u32 = 64 * SCALE * 2;
 const NY: u32 = 64 * SCALE;
 const NZ: u32 = 1;
@@ -255,7 +257,7 @@ impl State {
                 if x <= 1 || x >= NX - 2 || y <= 1 || y >= NY - 2 {
                     Node::with_density(1.0)
                 } else {
-                    Node::with_density(1.0 + f / 100.0)
+                    Node::with_density(1.0 + f / 10.0)
                 }
             })
             .collect();
@@ -265,35 +267,97 @@ impl State {
 
         let mut boundary_array = [false; (NX * NY) as usize];
 
-        let center_x = (NX / 4) as f32;
-        let center_y = (NY / 2) as f32;
-        let radius: f32 = 20.0;
-        let angles = 360;
+        // -================== AIRFOIL =======================
+        // for x_i in 0..NX {
+        //     for y_i in 0..NY {
+        //         if boundary::sd_airfoil([x_i as f32, y_i as f32], center_x, center_y, 00.0, 40.0)
+        //             <= 0.0
+        //         {
+        //             boundary_array[(x_i as u32 + y_i as u32 * NX) as usize] = true
+        //         }
+        //     }
+        // }
 
-        // Only store the nodes that make up the circle's surface
-        let mut indicies: Vec<u32> = Vec::new();
-        let mut rotation_angle = -30.0 * std::f32::consts::PI / 180.0; // 30 degrees in radians
+        // -================== LBM =======================
+        // for x_i in 0..NX {
+        //     for y_i in 0..NY {
+        //         let letter_spacing = 75.0; // Adjust spacing between letters
+        //         let base_x = 256.0 - 1.5 * letter_spacing; // Center the text at x=256
 
-        for angle in 0..angles {
-            let rad = (angle as f32 / angles as f32) * 360.0 * std::f32::consts::PI / 180.0;
+        //         // Check if point is in any letter
+        //         if is_point_in_letter(x_i as f32, y_i as f32, 'L', base_x, letter_spacing)
+        //             || is_point_in_letter(x_i as f32, y_i as f32, 'B', base_x, letter_spacing)
+        //             || is_point_in_letter(x_i as f32, y_i as f32, 'M', base_x, letter_spacing)
+        //         {
+        //             boundary_array[(x_i as u32 + y_i as u32 * NX) as usize] = true;
+        //         }
+        //     }
+        // }
 
-            // Base x and y values before rotation
-            let x = center_x + radius * rad.cos() * 2.0;
+        // -================== CIRCLE =======================
+        for x_i in 0..NX {
+            for y_i in 0..NY {
+                let center_x = NX as f32 / 4.0; // 1/4 of width
+                let center_y = NY as f32 / 2.0; // 1/2 of height
+                let radius = 20.0;
 
-            // Asymmetric thickness adjustment for y (top is thicker)
-            let asymmetry_factor = if rad.sin() >= 0.0 { 1.0 } else { 0.2 }; // Adjust to control thickness
-            let y = center_y + radius * rad.sin() * asymmetry_factor * (0.5 * rad).sin().powf(1.0);
+                // Calculate distance from point to center
+                let dx = x_i as f32 - center_x;
+                let dy = y_i as f32 - center_y;
+                let distance = (dx * dx + dy * dy).sqrt();
 
-            // Apply rotation transformation
-            let rotated_x = (x - center_x) * rotation_angle.cos()
-                - (y - center_y) * rotation_angle.sin()
-                + center_x;
-            let rotated_y = (x - center_x) * rotation_angle.sin()
-                + (y - center_y) * rotation_angle.cos()
-                + center_y;
-
-            boundary_array[(rotated_x as u32 + rotated_y as u32 * NX) as usize] = true;
+                // If point is inside or on the circle (distance <= radius), set boundary to true
+                if distance <= radius {
+                    boundary_array[(x_i as u32 + y_i as u32 * NX) as usize] = true;
+                }
+            }
         }
+
+        // -================== BOLTZMANN =======================
+        // let img = ImageReader::open("src/boltzmann.png")
+        //     .expect("Failed to open image")
+        //     .decode()
+        //     .expect("Failed to decode image")
+        //     .into_luma8();
+
+        // let scale_down = 1_f32; // Changed to float for scaling calculations
+        // let (orig_width, orig_height) = img.dimensions();
+        // let img_width = (orig_width as f32 / scale_down) as u32;
+        // let img_height = (orig_height as f32 / scale_down) as u32;
+
+        // for x_i in 0..NX {
+        //     for y_i in 0..NY {
+        //         if x_i + img_width / 2 >= NX / 4
+        //             && x_i <= img_width / 2 + NX / 4
+        //             && y_i + img_height / 2 >= NY / 2
+        //             && y_i <= img_height / 2 + NY / 2
+        //         {
+        //             // Calculate position in the centered, scaled region
+        //             let px = x_i - (NX / 4 - img_width / 2);
+        //             let py = y_i - (NY / 2 - img_height / 2);
+
+        //             // Scale back up to original image coordinates
+        //             let orig_x = ((px as f32) * scale_down) as u32;
+        //             let scaled_y = ((py as f32) * scale_down) as u32;
+
+        //             // Safe vertical flip with overflow check
+        //             let orig_y = if scaled_y < orig_height {
+        //                 orig_height - 1 - scaled_y
+        //             } else {
+        //                 0 // or handle this case as needed
+        //             };
+
+        //             // Check if we're within bounds of original image
+        //             if orig_x < orig_width && orig_y < orig_height {
+        //                 let pixel = img.get_pixel(orig_x, orig_y);
+        //                 let brightness = pixel[0];
+        //                 if brightness > 128 {
+        //                     boundary_array[(x_i as u32 + y_i as u32 * NX) as usize] = true;
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
 
         let packed_boundaries: Vec<u32> = boundary_array
             .chunks(32)
@@ -327,7 +391,7 @@ impl State {
             nodes_y: NY,
             mode: 0, // 0: velocity magnitude, 1: vorticity, 2: density set mode
             min_value: 0.0,
-            max_value: 0.3,
+            max_value: 0.75,
             boundary_nodes: boundary_array.len() as u32,
         };
 
@@ -353,7 +417,7 @@ impl State {
         let compute_buffer0 = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Compute Buffer 00"),
             contents: bytemuck::cast_slice(&nodes),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE,
         });
 
         let compute_buffer1 = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

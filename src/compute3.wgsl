@@ -21,6 +21,7 @@ struct Uniforms {
 const BOUNDARY_MOVING_LID = 1u;
 const BOUNDARY_NO_SLIP = 2u;
 const BOUNDARY_ZOUHE_INFLOW = 3u;
+const BOUNDARY_ZOUHE_OUTLFOW = 4u;
 // Define bit positions for each wall
 const NORTH_WALL_SHIFT: u32 = 0u;
 const SOUTH_WALL_SHIFT: u32 = 8u;
@@ -68,7 +69,7 @@ var<private> c_y: array<f32, 9> = array<f32, 9>(0.0, 0.0, 1.0, 0.0, -1.0, 1.0, 1
 var<private> w: array<f32, 9> = array<f32, 9>(4.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0);
 
 // Simulation parameters
-const tau = 0.5666667; // Relaxation time
+const tau = 0.55; // Relaxation time
 const omega = 1.0 / tau; // Relaxation frequency
 
 // Helper function to get flattened array index
@@ -219,12 +220,15 @@ fn cs_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // }
 
             // Handle different types of boundaries
-            switch (getBoundaryType(x, y)) {case BOUNDARY_MOVING_LID: {
+            switch (getBoundaryType(x, y)) {
+            case BOUNDARY_MOVING_LID: {
                 f = handleMovingLid(x, y, i);
             }case BOUNDARY_NO_SLIP: {
                 f = handleNoSlip(x, y, i);
             }case BOUNDARY_ZOUHE_INFLOW: {
                 f = handleWestInflow(x,y,i);
+            }case BOUNDARY_ZOUHE_OUTLFOW: {
+                f = handleEastOutflow(x,y,i);
             }default: {
                 f = inputBuffer[getIndex(x, y, i)];
             }}

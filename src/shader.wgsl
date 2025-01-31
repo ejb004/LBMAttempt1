@@ -164,7 +164,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         default: {
             // Density
             value = pow(macro_v.x,2.0);
-            colour = getColor(abs(value), 0.99, 1.2);
+            colour = getColor(abs(value), 0.99, 1.13) / 2.0;
 
 
         }

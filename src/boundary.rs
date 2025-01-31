@@ -14,6 +14,7 @@ impl BoundaryNode {
 const BOUNDARY_MOVING_LID: u32 = 1;
 const BOUNDARY_NO_SLIP: u32 = 2;
 const BOUNDARY_ZOUHE_INFLOW: u32 = 3;
+const BOUNDARY_ZOUHE_OUTLFOW: u32 = 4;
 
 // Define bit positions for each wall
 const NORTH_WALL_SHIFT: u32 = 0;
@@ -45,7 +46,124 @@ pub fn pack_LDC() -> u32 {
     pack_boundary_conditions(
         BOUNDARY_NO_SLIP,
         BOUNDARY_NO_SLIP,
-        BOUNDARY_NO_SLIP,
+        BOUNDARY_ZOUHE_OUTLFOW,
         BOUNDARY_ZOUHE_INFLOW,
     )
+}
+
+use std::f32::consts::PI;
+
+pub fn sd_airfoil(
+    p: [f32; 2],
+    center_x: f32,
+    center_y: f32,
+    rotation: f32,
+    chord_length: f32,
+) -> f32 {
+    // Translate the point to the center
+    let shifted_p = [p[0] - center_x, p[1] - center_y];
+
+    // Apply rotation using a rotation matrix
+    let cos_theta = rotation.cos();
+    let sin_theta = rotation.sin();
+    let rotated_p = [
+        shifted_p[0] * cos_theta - shifted_p[1] * sin_theta,
+        shifted_p[0] * sin_theta + shifted_p[1] * cos_theta,
+    ];
+
+    // Airfoil SDF logic
+    let x = rotated_p[0] / chord_length; // Normalized x along the chord
+    let y = rotated_p[1] / chord_length; // Normalized y along the chord
+
+    // Define upper and lower surfaces of the airfoil
+    let upper_y = 0.15 * (1.0 - x * x).sqrt(); // Example airfoil curve (parabolic)
+    let lower_y = -0.05 * (1.0 - x * x).sqrt();
+
+    if x < -1.0 || x > 1.0 {
+        // Outside chord length, distance to nearest point
+        let edge_distance = ((x - x.clamp(-1.0, 1.0)).hypot(y));
+        edge_distance
+    } else if y > upper_y {
+        // Above the upper surface
+        y - upper_y
+    } else if y < lower_y {
+        // Below the lower surface
+        lower_y - y
+    } else {
+        // Inside the airfoil shape
+        -y.abs().min(upper_y.abs() - y.abs())
+    }
+}
+
+pub fn is_point_in_letter(x: f32, y: f32, letter: char, base_x: f32, letter_spacing: f32) -> bool {
+    let height = 100.0; // Reduced from 150 to 100 (2/3 size)
+    let thickness = 13.0; // Reduced from 20 to ~13 (2/3 size)
+
+    // Adjust x position based on letter position
+    let letter_position = match letter {
+        'L' => 0,
+        'B' => 1,
+        'M' => 2,
+        _ => return false,
+    };
+    let x = x - (base_x + letter_position as f32 * letter_spacing);
+    let y = 128.0 - y; // Flip y-coordinates and center at y=128
+
+    match letter {
+        'L' => {
+            // Vertical line
+            let in_vertical = x >= 0.0 && x <= thickness && y >= -height / 2.0 && y <= height / 2.0;
+            // Horizontal line
+            let in_horizontal =
+                x >= 0.0 && x <= height / 2.0 && y >= height / 2.0 - thickness && y <= height / 2.0;
+            in_vertical || in_horizontal
+        }
+        'B' => {
+            // Vertical line
+            let in_vertical = x >= 0.0 && x <= thickness && y >= -height / 2.0 && y <= height / 2.0;
+            // Upper loop
+            let upper_center_y = height / 4.0;
+            let in_upper = {
+                let dx = x - thickness;
+                let dy = y - upper_center_y;
+                dx * dx + dy * dy <= (height / 4.0) * (height / 4.0)
+                    && x >= 0.0
+                    && x <= thickness + height / 4.0
+                    && dx * dx + dy * dy >= 100.0
+            };
+            // Lower loop
+            let lower_center_y = -height / 4.0;
+            let in_lower = {
+                let dx = x - thickness;
+                let dy = y - lower_center_y;
+                dx * dx + dy * dy <= (height / 4.0) * (height / 4.0)
+                    && x >= 0.0
+                    && x <= thickness + height / 4.0
+                    && dx * dx + dy * dy >= 100.0
+            };
+            in_vertical || in_upper || in_lower
+        }
+        'M' => {
+            // Left vertical
+            let in_left = x >= 0.0 && x <= thickness && y >= -height / 2.0 && y <= height / 2.0;
+            // Right vertical
+            let in_right = x >= height / 2.0 - thickness
+                && x <= height / 2.0
+                && y >= -height / 2.0
+                && y <= height / 2.0;
+            // Middle vertical
+            let in_middle = x >= (height / 4.0 - thickness / 2.0)
+                && x <= (height / 4.0 + thickness / 2.0)
+                && y >= -height / 2.0
+                && y <= height / 2.0;
+            // Horizontal connector at bottom
+            let in_horizontal = x >= 0.0
+                && x <= height / 2.0
+                && y >= -height / 2.0
+                && y <= -height / 2.0 + thickness;
+
+            in_left || in_right || in_middle || in_horizontal || in_left || in_right || in_middle
+        }
+        _ => false,
+    }
 }
