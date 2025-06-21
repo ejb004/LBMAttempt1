@@ -303,6 +303,26 @@ impl State {
 
                 // Calculate distance from point to center
                 let dx = x_i as f32 - center_x;
+                let dy = y_i as f32 - center_y / 2.0;
+                let distance = (dx * dx + dy * dy).sqrt();
+
+                // If point is inside or on the circle (distance <= radius), set boundary to true
+                if distance <= radius {
+                    boundary_array[(x_i as u32 + y_i as u32 * NX) as usize] = true;
+                }
+
+                // Calculate distance from point to center
+                let dx = x_i as f32 - center_x;
+                let dy = y_i as f32 - center_y / 0.75;
+                let distance = (dx * dx + dy * dy).sqrt();
+
+                // If point is inside or on the circle (distance <= radius), set boundary to true
+                if distance <= radius {
+                    boundary_array[(x_i as u32 + y_i as u32 * NX) as usize] = true;
+                }
+
+                // Calculate distance from point to center
+                let dx = x_i as f32 - center_x / 0.75;
                 let dy = y_i as f32 - center_y;
                 let distance = (dx * dx + dy * dy).sqrt();
 
@@ -377,7 +397,7 @@ impl State {
             nodes_y: NY,
             inlet_vel: [0.1, 0.0],
             boundary_nodes: boundaries.len() as u32,
-            walls: crate::boundary::pack_LDC(),
+            walls: crate::boundary::pack_wind_tunnel(),
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

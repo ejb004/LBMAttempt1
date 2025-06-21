@@ -42,12 +42,21 @@ pub fn pack_all_no_slip() -> u32 {
     )
 }
 
-pub fn pack_LDC() -> u32 {
+pub fn pack_wind_tunnel() -> u32 {
     pack_boundary_conditions(
         BOUNDARY_NO_SLIP,
         BOUNDARY_NO_SLIP,
         BOUNDARY_ZOUHE_OUTLFOW,
         BOUNDARY_ZOUHE_INFLOW,
+    )
+}
+
+pub fn pack_LDC() -> u32 {
+    pack_boundary_conditions(
+        BOUNDARY_MOVING_LID,
+        BOUNDARY_NO_SLIP,
+        BOUNDARY_NO_SLIP,
+        BOUNDARY_NO_SLIP,
     )
 }
 
