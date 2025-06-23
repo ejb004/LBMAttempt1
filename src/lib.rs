@@ -19,7 +19,7 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-const SCALE: u32 = 6; // 2 is default
+const SCALE: u32 = 4; // 2 is default
 const NX: u32 = 64 * SCALE * 2;
 const NY: u32 = 64 * SCALE;
 const NZ: u32 = 1;
@@ -247,17 +247,17 @@ impl State {
 
         let nodes: Vec<Node> = (0..NODES)
             .map(|i| {
-                let mut rng = rand::thread_rng();
-                let f: f32 = rng.gen();
-
-                // Node::with_density(1.0 + y / 20.0)
-
                 let x = i % NX;
                 let y = i / NX;
-                if x <= 1 || x >= NX - 2 || y <= 1 || y >= NY - 2 {
+
+                if x <= 2 {
+                    // Wider inlet turbulence region
+                    let mut rng = rand::thread_rng();
+                    let turbulence_intensity = 0.5; // 15% instead of 5%!
+                    let perturbation = (rng.gen::<f32>() - 0.5) * turbulence_intensity;
                     Node::with_density(1.0)
                 } else {
-                    Node::with_density(1.0 + f / 10.0)
+                    Node::with_density(1.0)
                 }
             })
             .collect();
@@ -295,43 +295,23 @@ impl State {
         // }
 
         // -================== CIRCLE =======================
-        for x_i in 0..NX {
-            for y_i in 0..NY {
-                let center_x = NX as f32 / 4.0; // 1/4 of width
-                let center_y = NY as f32 / 2.0; // 1/2 of height
-                let radius = 20.0;
+        // for x_i in 0..NX {
+        //     for y_i in 0..NY {
+        //         let center_x = NX as f32 / 4.0; // 1/4 of width
+        //         let center_y = NY as f32 / 2.0; // 1/2 of height
+        //         let radius = 10.0;
 
-                // Calculate distance from point to center
-                let dx = x_i as f32 - center_x;
-                let dy = y_i as f32 - center_y / 2.0;
-                let distance = (dx * dx + dy * dy).sqrt();
+        //         // Calculate distance from point to center
+        //         let dx = x_i as f32 - center_x;
+        //         let dy = y_i as f32 - center_y;
+        //         let distance = (dx * dx + dy * dy).sqrt();
 
-                // If point is inside or on the circle (distance <= radius), set boundary to true
-                if distance <= radius {
-                    boundary_array[(x_i as u32 + y_i as u32 * NX) as usize] = true;
-                }
-
-                // Calculate distance from point to center
-                let dx = x_i as f32 - center_x;
-                let dy = y_i as f32 - center_y / 0.75;
-                let distance = (dx * dx + dy * dy).sqrt();
-
-                // If point is inside or on the circle (distance <= radius), set boundary to true
-                if distance <= radius {
-                    boundary_array[(x_i as u32 + y_i as u32 * NX) as usize] = true;
-                }
-
-                // Calculate distance from point to center
-                let dx = x_i as f32 - center_x / 0.75;
-                let dy = y_i as f32 - center_y;
-                let distance = (dx * dx + dy * dy).sqrt();
-
-                // If point is inside or on the circle (distance <= radius), set boundary to true
-                if distance <= radius {
-                    boundary_array[(x_i as u32 + y_i as u32 * NX) as usize] = true;
-                }
-            }
-        }
+        //         // If point is inside or on the circle (distance <= radius), set boundary to true
+        //         if distance <= radius {
+        //             boundary_array[(x_i as u32 + y_i as u32 * NX) as usize] = true;
+        //         }
+        //     }
+        // }
 
         // -================== BOLTZMANN =======================
         // let img = ImageReader::open("src/boltzmann.png")
@@ -340,34 +320,43 @@ impl State {
         //     .expect("Failed to decode image")
         //     .into_luma8();
 
-        // let scale_down = 1_f32; // Changed to float for scaling calculations
+        // let scale_down = 2_f32;
         // let (orig_width, orig_height) = img.dimensions();
         // let img_width = (orig_width as f32 / scale_down) as u32;
         // let img_height = (orig_height as f32 / scale_down) as u32;
 
+        // // Calculate offsets as signed integers first
+        // let offset_x = (NX / 4) as i32 - (img_width / 2) as i32;
+        // let offset_y = (NY / 2) as i32 - (img_height / 2) as i32;
+
         // for x_i in 0..NX {
         //     for y_i in 0..NY {
-        //         if x_i + img_width / 2 >= NX / 4
-        //             && x_i <= img_width / 2 + NX / 4
-        //             && y_i + img_height / 2 >= NY / 2
-        //             && y_i <= img_height / 2 + NY / 2
-        //         {
-        //             // Calculate position in the centered, scaled region
-        //             let px = x_i - (NX / 4 - img_width / 2);
-        //             let py = y_i - (NY / 2 - img_height / 2);
+        //         // Convert to signed for safe arithmetic
+        //         let x_signed = x_i as i32;
+        //         let y_signed = y_i as i32;
+
+        //         // Check if we're in the image region
+        //         let px = x_signed - offset_x;
+        //         let py = y_signed - offset_y;
+
+        //         // Only process if within scaled image bounds
+        //         if px >= 0 && py >= 0 && px < img_width as i32 && py < img_height as i32 {
+        //             // Convert back to u32 for image access
+        //             let px_u32 = px as u32;
+        //             let py_u32 = py as u32;
 
         //             // Scale back up to original image coordinates
-        //             let orig_x = ((px as f32) * scale_down) as u32;
-        //             let scaled_y = ((py as f32) * scale_down) as u32;
+        //             let orig_x = ((px_u32 as f32) * scale_down) as u32;
+        //             let scaled_y = ((py_u32 as f32) * scale_down) as u32;
 
-        //             // Safe vertical flip with overflow check
+        //             // Safe vertical flip
         //             let orig_y = if scaled_y < orig_height {
         //                 orig_height - 1 - scaled_y
         //             } else {
-        //                 0 // or handle this case as needed
+        //                 continue; // Skip if out of bounds
         //             };
 
-        //             // Check if we're within bounds of original image
+        //             // Final bounds check and pixel processing
         //             if orig_x < orig_width && orig_y < orig_height {
         //                 let pixel = img.get_pixel(orig_x, orig_y);
         //                 let brightness = pixel[0];
@@ -378,6 +367,15 @@ impl State {
         //         }
         //     }
         // }
+
+        boundary::create_multiple_circles(&mut boundary_array, NX, NY);
+        // boundary::create_venturi_nozzle(&mut boundary_array, NX, NY);
+        // boundary::create_heat_exchanger(&mut boundary_array, NX, NY);
+        // boundary::create_wavy_channel(&mut boundary_array, NX, NY);
+        // boundary::create_maze_pattern(&mut boundary_array, NX, NY);
+        // boundary::create_building_cluster(&mut boundary_array, NX, NY);
+        // boundary::create_square_cylinder_splitter(&mut boundary_array, NX, NY);
+        // boundary::create_ahmed_body(&mut boundary_array, NX, NY);
 
         let packed_boundaries: Vec<u32> = boundary_array
             .chunks(32)
@@ -411,7 +409,7 @@ impl State {
             nodes_y: NY,
             mode: 0, // 0: velocity magnitude, 1: vorticity, 2: density set mode
             min_value: 0.0,
-            max_value: 0.75,
+            max_value: 0.2,
             boundary_nodes: boundary_array.len() as u32,
         };
 
@@ -426,7 +424,9 @@ impl State {
         // COMPUTE SHADER ----------------------------------------------------------------------------------------------------
 
         let utils_shader = include_str!("zou_he.wgsl");
-        let compute_shader_string = include_str!("compute3.wgsl");
+        // let compute_shader_string = include_str!("compute3.wgsl");
+        let compute_shader_string = include_str!("MRT.wgsl");
+        // let compute_shader_string = include_str!("CLBM.wgsl");
         let combined_shader = format!("{}\n{}", compute_shader_string, utils_shader);
 
         let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {

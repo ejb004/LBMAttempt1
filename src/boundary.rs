@@ -176,3 +176,308 @@ pub fn is_point_in_letter(x: f32, y: f32, letter: char, base_x: f32, letter_spac
         _ => false,
     }
 }
+
+pub fn create_multiple_circles(boundary_array: &mut [bool], nx: u32, ny: u32) {
+    for x_i in 0..nx {
+        for y_i in 0..ny {
+            let x = x_i as f32;
+            let y = y_i as f32;
+
+            // Large central circle
+            let center1_x = nx as f32 / 2.0;
+            let center1_y = ny as f32 / 2.0;
+            let radius1 = 25.0;
+            let dist1 = ((x - center1_x).powi(2) + (y - center1_y).powi(2)).sqrt();
+
+            // Four smaller circles around it
+            let radius2 = 8.0;
+            let offset = 40.0;
+
+            let centers = [
+                (center1_x - offset, center1_y), // Left
+                (center1_x + offset, center1_y), // Right
+                (center1_x, center1_y - offset), // Top
+                (center1_x, center1_y + offset), // Bottom
+            ];
+
+            let mut is_boundary = dist1 <= radius1;
+
+            for (cx, cy) in centers.iter() {
+                let dist = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
+                if dist <= radius2 {
+                    is_boundary = true;
+                }
+            }
+
+            if is_boundary {
+                boundary_array[(x_i + y_i * nx) as usize] = true;
+            }
+        }
+    }
+}
+
+pub fn create_venturi_nozzle(boundary_array: &mut [bool], nx: u32, ny: u32) {
+    for x_i in 0..nx {
+        for y_i in 0..ny {
+            let x = x_i as f32;
+            let y = y_i as f32;
+
+            let inlet_width = ny as f32 * 0.8;
+            let throat_width = ny as f32 * 0.2;
+            let outlet_width = ny as f32 * 0.6;
+
+            let inlet_length = nx as f32 * 0.2;
+            let converging_length = nx as f32 * 0.2;
+            let throat_length = nx as f32 * 0.2;
+            let diverging_length = nx as f32 * 0.3;
+
+            let center_y = ny as f32 / 2.0;
+
+            let mut channel_half_width = 0.0;
+
+            if x < inlet_length {
+                // Inlet section
+                channel_half_width = inlet_width / 2.0;
+            } else if x < inlet_length + converging_length {
+                // Converging section
+                let t = (x - inlet_length) / converging_length;
+                channel_half_width = inlet_width / 2.0 * (1.0 - t) + throat_width / 2.0 * t;
+            } else if x < inlet_length + converging_length + throat_length {
+                // Throat section
+                channel_half_width = throat_width / 2.0;
+            } else {
+                // Diverging section
+                let t = (x - inlet_length - converging_length - throat_length) / diverging_length;
+                channel_half_width = throat_width / 2.0 * (1.0 - t) + outlet_width / 2.0 * t;
+            }
+
+            let distance_from_center = (y - center_y).abs();
+
+            if distance_from_center >= channel_half_width {
+                boundary_array[(x_i + y_i * nx) as usize] = true;
+            }
+        }
+    }
+}
+
+pub fn create_wavy_channel(boundary_array: &mut [bool], nx: u32, ny: u32) {
+    for x_i in 0..nx {
+        for y_i in 0..ny {
+            let x = x_i as f32;
+            let y = y_i as f32;
+
+            let amplitude = ny as f32 * 0.15;
+            let frequency = 4.0 * std::f32::consts::PI / nx as f32;
+            let base_width = ny as f32 * 0.3;
+
+            let center_y = ny as f32 / 2.0;
+            let wave_offset = amplitude * (frequency * x).sin();
+
+            let top_boundary = center_y + base_width / 2.0 + wave_offset;
+            let bottom_boundary = center_y - base_width / 2.0 + wave_offset;
+
+            if y < bottom_boundary || y > top_boundary {
+                boundary_array[(x_i + y_i * nx) as usize] = true;
+            }
+        }
+    }
+}
+
+pub fn create_heat_exchanger(boundary_array: &mut [bool], nx: u32, ny: u32) {
+    for x_i in 0..nx {
+        for y_i in 0..ny {
+            let x = x_i as f32;
+            let y = y_i as f32;
+
+            let fin_spacing = 30.0;
+            let fin_thickness = 4.0;
+            let fin_height = ny as f32 * 0.7;
+            let base_height = ny as f32 * 0.1;
+
+            // Base plate
+            if y < base_height || y > ny as f32 - base_height {
+                boundary_array[(x_i + y_i * nx) as usize] = true;
+                continue;
+            }
+
+            // Vertical fins
+            let fin_position = x % fin_spacing;
+            if fin_position < fin_thickness {
+                let center_y = ny as f32 / 2.0;
+                let fin_start = center_y - fin_height / 2.0;
+                let fin_end = center_y + fin_height / 2.0;
+
+                if y >= fin_start && y <= fin_end {
+                    boundary_array[(x_i + y_i * nx) as usize] = true;
+                }
+            }
+        }
+    }
+}
+
+pub fn create_maze_pattern(boundary_array: &mut [bool], nx: u32, ny: u32) {
+    for x_i in 0..nx {
+        for y_i in 0..ny {
+            let x = x_i as f32;
+            let y = y_i as f32;
+
+            let wall_thickness = 3.0;
+            let cell_size = 20.0;
+
+            // Create grid pattern
+            let grid_x = (x % cell_size) < wall_thickness;
+            let grid_y = (y % cell_size) < wall_thickness;
+
+            // Add some gaps to make it navigable
+            let gap_size = 8.0;
+            let cell_center_x = (x / cell_size).floor() * cell_size + cell_size / 2.0;
+            let cell_center_y = (y / cell_size).floor() * cell_size + cell_size / 2.0;
+
+            let near_center_x = (x - cell_center_x).abs() < gap_size;
+            let near_center_y = (y - cell_center_y).abs() < gap_size;
+
+            // Create gaps in alternating pattern
+            let cell_x_idx = (x / cell_size).floor() as u32;
+            let cell_y_idx = (y / cell_size).floor() as u32;
+            let has_x_gap = (cell_x_idx + cell_y_idx) % 2 == 0;
+            let has_y_gap = (cell_x_idx + cell_y_idx) % 2 == 1;
+
+            let is_wall = (grid_x && !(has_x_gap && near_center_y))
+                || (grid_y && !(has_y_gap && near_center_x));
+
+            if is_wall {
+                boundary_array[(x_i + y_i * nx) as usize] = true;
+            }
+        }
+    }
+}
+
+pub fn create_building_cluster(boundary_array: &mut [bool], nx: u32, ny: u32) {
+    let buildings = [
+        // (x_start, y_start, width, height)
+        (
+            nx as f32 * 0.2,
+            ny as f32 * 0.1,
+            nx as f32 * 0.08,
+            ny as f32 * 0.25,
+        ),
+        (
+            nx as f32 * 0.35,
+            ny as f32 * 0.15,
+            nx as f32 * 0.06,
+            ny as f32 * 0.35,
+        ),
+        (
+            nx as f32 * 0.5,
+            ny as f32 * 0.1,
+            nx as f32 * 0.1,
+            ny as f32 * 0.2,
+        ),
+        (
+            nx as f32 * 0.65,
+            ny as f32 * 0.2,
+            nx as f32 * 0.07,
+            ny as f32 * 0.3,
+        ),
+        (
+            nx as f32 * 0.3,
+            ny as f32 * 0.6,
+            nx as f32 * 0.09,
+            ny as f32 * 0.15,
+        ),
+        (
+            nx as f32 * 0.45,
+            ny as f32 * 0.65,
+            nx as f32 * 0.08,
+            ny as f32 * 0.25,
+        ),
+    ];
+
+    for x_i in 0..nx {
+        for y_i in 0..ny {
+            let x = x_i as f32;
+            let y = y_i as f32;
+
+            for &(bx, by, bw, bh) in buildings.iter() {
+                if x >= bx && x <= bx + bw && y >= by && y <= by + bh {
+                    boundary_array[(x_i + y_i * nx) as usize] = true;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+pub fn create_square_cylinder_splitter(boundary_array: &mut [bool], nx: u32, ny: u32) {
+    for x_i in 0..nx {
+        for y_i in 0..ny {
+            let x = x_i as f32;
+            let y = y_i as f32;
+
+            let cylinder_size = ny as f32 * 0.1;
+            let center_x = nx as f32 * 0.3;
+            let center_y = ny as f32 * 0.5;
+
+            // Square cylinder
+            if (x - center_x).abs() <= cylinder_size / 2.0
+                && (y - center_y).abs() <= cylinder_size / 2.0
+            {
+                boundary_array[(x_i + y_i * nx) as usize] = true;
+            }
+
+            // Splitter plate extending downstream
+            let plate_length = nx as f32 * 0.2;
+            let plate_thickness = 2.0;
+
+            if x >= center_x + cylinder_size / 2.0
+                && x <= center_x + cylinder_size / 2.0 + plate_length
+                && (y - center_y).abs() <= plate_thickness / 2.0
+            {
+                boundary_array[(x_i + y_i * nx) as usize] = true;
+            }
+        }
+    }
+}
+
+pub fn create_ahmed_body(boundary_array: &mut [bool], nx: u32, ny: u32) {
+    for x_i in 0..nx {
+        for y_i in 0..ny {
+            let x = x_i as f32;
+            let y = y_i as f32;
+
+            let body_length = nx as f32 * 0.4;
+            let body_height = ny as f32 * 0.2;
+            let body_width = ny as f32 * 0.15;
+
+            let start_x = nx as f32 * 0.2;
+            let base_y = ny as f32 * 0.2;
+
+            let center_y = ny as f32 * 0.5;
+
+            // Main body
+            if x >= start_x
+                && x <= start_x + body_length * 0.7
+                && y >= base_y
+                && y <= base_y + body_height
+                && (y - center_y).abs() <= body_width
+            {
+                boundary_array[(x_i + y_i * nx) as usize] = true;
+            }
+
+            // Slanted rear section (25° slant)
+            let slant_start = start_x + body_length * 0.7;
+            let slant_length = body_length * 0.3;
+            let slant_angle = 25.0_f32.to_radians();
+
+            if x >= slant_start && x <= start_x + body_length && (y - center_y).abs() <= body_width
+            {
+                let x_rel = x - slant_start;
+                let slant_height = body_height - x_rel * slant_angle.tan();
+
+                if y >= base_y && y <= base_y + slant_height {
+                    boundary_array[(x_i + y_i * nx) as usize] = true;
+                }
+            }
+        }
+    }
+}

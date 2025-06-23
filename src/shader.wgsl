@@ -137,16 +137,56 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     switch(uniforms.mode) {
         case 0u: {
-            // Velocity magnitude
-            value = sqrt(macro_v.y * macro_v.y + macro_v.z * macro_v.z);
-            colour = getColor(value, uniforms.min_value, uniforms.max_value);
-            
-            // if value % 0.005 < 0.001 {
-                
-            // } else {
-            //     colour = vec3<f32>(0.0,0.0,0.0);
-            // }
+        // Enhanced velocity magnitude visualization
+        let vel_mag = sqrt(macro_v.y * macro_v.y + macro_v.z * macro_v.z);
+        
+        // Adaptive range mapping - use percentile-based scaling instead of raw max
+        let range = uniforms.max_value - uniforms.min_value;
+        let normalized = clamp((vel_mag - uniforms.min_value) / range, 0.0, 1.0);
+        
+        // Apply gamma correction for better perceptual distribution
+        let scaled_value = pow(normalized, 0.7);
+        
+        // Thermal camera color mapping (FLIR-style)
+        if (scaled_value < 0.01) {
+            // Very cold/low velocity - deep purple/black
+            colour = vec3<f32>(0.0, 0.0, 0.0);
+        } else if (scaled_value < 0.2) {
+            // Cold - black to deep purple
+            let t = scaled_value / 0.2;
+            colour = mix(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.2, 0.0, 0.4), t);
+        } else if (scaled_value < 0.4) {
+            // Cool - purple to blue
+            let t = (scaled_value - 0.2) / 0.2;
+            colour = mix(vec3<f32>(0.2, 0.0, 0.4), vec3<f32>(0.0, 0.0, 0.8), t);
+        } else if (scaled_value < 0.6) {
+            // Warm - blue to red
+            let t = (scaled_value - 0.4) / 0.2;
+            colour = mix(vec3<f32>(0.0, 0.0, 0.8), vec3<f32>(0.8, 0.0, 0.0), t);
+        } else if (scaled_value < 0.8) {
+            // Hot - red to orange
+            let t = (scaled_value - 0.6) / 0.2;
+            colour = mix(vec3<f32>(0.8, 0.0, 0.0), vec3<f32>(1.0, 0.4, 0.0), t);
+        } else {
+            // Very hot - orange to white hot
+            let t = (scaled_value - 0.8) / 0.2;
+            colour = mix(vec3<f32>(1.0, 0.4, 0.0), vec3<f32>(1.0, 1.0, 1.0), t);
         }
+        
+        // Optional: Add velocity streamlines overlay
+        // Uncomment for contour-like effect
+        /*
+        let contour_spacing = 0.02;
+        let contour_thickness = 0.005;
+        let contour_level = floor(scaled_value / contour_spacing) * contour_spacing;
+        if (abs(scaled_value - contour_level) < contour_thickness) {
+            colour = mix(colour, vec3<f32>(1.0, 1.0, 1.0), 0.3);
+        }
+        */
+        
+        // Boost overall brightness and ensure full range usage
+        colour = clamp(colour * 1.3, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
         case 1u: {
             // Vorticity
             value = (getVorticity(x, y) * 20.0) * macro_v.x;
